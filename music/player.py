@@ -19,7 +19,7 @@ from music.config import get_config_val
 class MpvPlayer:
     """Controls an mpv instance running in background via Unix domain socket IPC."""
 
-    def __init__(self, initial_volume: int = 80):
+    def __init__(self, initial_volume: int = 100):
         self.initial_volume = initial_volume
         self.sock_path = os.path.join(tempfile.gettempdir(), f"music_cli_{os.getpid()}_{id(self)}.sock")
         self.process: Optional[subprocess.Popen] = None

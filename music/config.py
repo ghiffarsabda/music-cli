@@ -32,7 +32,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "profile": "",  # profile key e.g. 'Default', 'Profile 1'
     "account_email": "",
     "cookies_file": str(COOKIES_FILE),
-    "volume": 80,
+    "volume": 100,
     "audio_quality": "best",  # 'best', 'high', 'medium'
     "auto_play_top": True,
     "autoplay": True,  # Autoplay next track when song finishes

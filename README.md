@@ -107,6 +107,7 @@ While a track is playing in your terminal:
 | <kbd>Space</kbd> | Toggle Play / Pause |
 | <kbd>/</kbd> or <kbd>s</kbd> | **Search while playing** (Uninterrupted playback, Play Now or Add to Queue) |
 | <kbd>Tab</kbd> or <kbd>u</kbd> | **Open Queue Manager** (View upcoming tracks, reorder, remove) |
+| <kbd>P</kbd> | **Previous track** (or replay from start if &gt;3s) |
 | <kbd>N</kbd> | **Skip to Next track** (Autoplay queue) |
 | <kbd>→</kbd> / <kbd>←</kbd> | Seek forward / backward 5 seconds |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Increase / decrease volume by 5% |

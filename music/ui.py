@@ -247,7 +247,7 @@ def render_player_panel(
     time_pos = status.get("time_pos", 0.0)
     duration = status.get("duration", 0.0) or float(song.duration_seconds or 1.0)
     paused = status.get("paused", False)
-    volume = status.get("volume", 80)
+    volume = status.get("volume", 100)
     muted = status.get("muted", False)
 
     # State badge
@@ -317,6 +317,7 @@ def render_player_panel(
         r"[bold white][Space][/bold white] Play/Pause   "
         r"[bold white]\[/][/bold white] Search   "
         r"[bold white][Tab][/bold white] Queue   "
+        r"[bold white][P][/bold white] Previous   "
         r"[bold white][N][/bold white] Next   "
         r"[bold white][←/→][/bold white] ±5s   "
         r"[bold white][↑/↓][/bold white] Vol   "
@@ -441,9 +442,14 @@ def run_player_loop(
     show_lyrics: Optional[bool] = None,
     initial_queue: Optional[List[SongItem]] = None,
     playlist_name: Optional[str] = None,
+    playlist_pos: Optional[Tuple[int, int]] = None,
+    history_stack: Optional[List[SongItem]] = None,
+    enable_autoplay: Optional[bool] = None,
 ) -> None:
     """Main interactive loop for playback, prebuffering, ad-blocking, synced lyrics, and keyboard control."""
     auth_info = get_auth_status()
+    if autoplay is None and enable_autoplay is not None:
+        autoplay = enable_autoplay
     if autoplay is None:
         autoplay = get_config_val("autoplay", True)
     if ad_blocker is None:
@@ -455,9 +461,10 @@ def run_player_loop(
     add_to_history(curr_song)
 
     queue: List[SongItem] = list(initial_queue) if initial_queue else []
+    history_queue: List[SongItem] = list(history_stack) if history_stack else []
     seen_ids = {curr_song.video_id} | {s.video_id for s in queue}
-    playlist_total = (len(initial_queue) + 1) if playlist_name and initial_queue else (1 if playlist_name else 0)
-    playlist_index = 1 if playlist_name else 0
+    playlist_total = playlist_pos[1] if playlist_pos else ((len(initial_queue) + 1) if playlist_name and initial_queue else (1 if playlist_name else 0))
+    playlist_index = playlist_pos[0] if playlist_pos else (1 if playlist_name else 0)
 
     buffered_song: Optional[SongItem] = None
     prebuffering_vid: Optional[str] = None
@@ -581,9 +588,33 @@ def run_player_loop(
                         break
                     elif key == " ":
                         player.toggle_pause()
+                    elif key in ("p", "P"):
+                        time_pos = status.get("time_pos", 0.0)
+                        if time_pos > 3.0 or not history_queue:
+                            player.restart()
+                            message = f"⏮ Replaying: {_truncate_text(curr_song.title, 26)}"
+                            msg_clear_time = time.time() + 2.0
+                        else:
+                            prev_song = history_queue.pop()
+                            queue.insert(0, curr_song)
+                            curr_song = prev_song
+                            if playlist_index > 1:
+                                playlist_index -= 1
+                            player.clear_playlist_queue()
+                            stream_url = resolve_audio_stream_url(curr_song)
+                            player.play(stream_url)
+                            with lock:
+                                buffered_song = None
+                                prebuffering_vid = None
+                            sync_prebuffered_track()
+                            threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                            threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
+                            message = f"⏮ Previous: {_truncate_text(curr_song.title, 26)}"
+                            msg_clear_time = time.time() + 2.0
                     elif key in ("n", "N", ">"):
                         if queue:
                             playlist_index += 1
+                            history_queue.append(curr_song)
                             next_track = queue[0]
                             with lock:
                                 is_buf = bool(buffered_song and buffered_song.video_id == next_track.video_id)
@@ -642,6 +673,7 @@ def run_player_loop(
                         if search_action:
                             act_type, target, remaining = search_action
                             if act_type == "play_now":
+                                history_queue.append(curr_song)
                                 curr_song = target
                                 if remaining:
                                     queue = list(remaining)
@@ -706,6 +738,7 @@ def run_player_loop(
                             queue_notif_clear = time.time() + 1.5
                     elif show_queue and key in ("enter", "\r", "\n"):
                         if queue and 0 <= queue_selected_idx < len(queue):
+                            history_queue.append(curr_song)
                             curr_song = queue.pop(queue_selected_idx)
                             add_to_history(curr_song)
                             stream_url = resolve_audio_stream_url(curr_song)
@@ -780,6 +813,7 @@ def run_player_loop(
                     playlist_index += 1
                     # mpv automatically advanced to pre-buffered track!
                     player.remove_track(0)
+                    history_queue.append(curr_song)
                     curr_song = queue.pop(0)
                     with lock:
                         buffered_song = None
@@ -839,6 +873,7 @@ def run_player_loop(
                         if is_ready:
                             player.next_track()
                             player.remove_track(0)
+                            history_queue.append(curr_song)
                             curr_song = queue.pop(0)
                             with lock:
                                 buffered_song = None
@@ -850,6 +885,7 @@ def run_player_loop(
                             msg_clear_time = time.time() + 2.5
                         else:
                             player.clear_playlist_queue()
+                            history_queue.append(curr_song)
                             curr_song = queue.pop(0)
                             with lock:
                                 buffered_song = None

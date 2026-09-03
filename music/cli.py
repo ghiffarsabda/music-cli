@@ -97,7 +97,7 @@ def handle_playlist_query(
         start_song = tracks[0]
         initial_queue = tracks[1:]
 
-    vol = get_config_val("volume", 80)
+    vol = get_config_val("volume", 100)
     player = MpvPlayer(initial_volume=vol)
     run_player_loop(
         start_song,
@@ -165,7 +165,7 @@ def handle_album_query(
 
     start_song = tracks[start_idx]
     initial_queue = tracks[start_idx + 1 :]
-    vol = get_config_val("volume", 80)
+    vol = get_config_val("volume", 100)
     player = MpvPlayer(initial_volume=vol)
     album_title = album_item.title if album_item else "Album"
 
@@ -220,7 +220,7 @@ def handle_play_query(
         else:
             selected_song = results[0]
 
-    vol = get_config_val("volume", 80)
+    vol = get_config_val("volume", 100)
     player = MpvPlayer(initial_volume=vol)
     run_player_loop(
         selected_song,
@@ -305,7 +305,7 @@ def handle_history(args: argparse.Namespace) -> None:
             return
         idx = int(choice)
         if 1 <= idx <= len(history):
-            vol = get_config_val("volume", 80)
+            vol = get_config_val("volume", 100)
             player = MpvPlayer(initial_volume=vol)
             run_player_loop(history[idx - 1], player)
     except (ValueError, KeyboardInterrupt, EOFError):
@@ -380,20 +380,22 @@ def launch_home_session() -> None:
             break
         act_type, target = action
         if act_type == "track":
-            vol = get_config_val("volume", 80)
+            vol = get_config_val("volume", 100)
             player = MpvPlayer(initial_volume=vol)
             run_player_loop(target, player)
         elif act_type in ("container_track", "playlist_track"):
-            vol = get_config_val("volume", 80)
+            vol = get_config_val("volume", 100)
             player = MpvPlayer(initial_volume=vol)
             p_type = getattr(target, "parent_type", "playlist").capitalize()
             p_title = getattr(target, "parent_title", getattr(target, "playlist", None).title if hasattr(target, "playlist") else "Collection")
             full_t = getattr(target, "full_tracks", getattr(target, "full_playlist_tracks", []))
             initial_queue = full_t[target.track_index + 1 :]
+            played_history = full_t[:target.track_index]
             run_player_loop(
                 target.song,
                 player,
                 initial_queue=initial_queue,
+                history_stack=played_history,
                 playlist_name=f"{p_type}: {p_title}",
                 playlist_pos=(target.track_index + 1, len(full_t)),
             )
