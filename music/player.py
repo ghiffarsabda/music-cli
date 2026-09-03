@@ -3,8 +3,10 @@
 import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -74,11 +76,25 @@ class MpvPlayer:
         for opt in get_mpv_auth_args():
             cmd.append(opt)
 
+        # Ensure child mpv is terminated by the kernel if parent process dies unexpectedly
+        preexec = None
+        if sys.platform.startswith("linux"):
+            def _setup_child():
+                import ctypes
+                try:
+                    libc = ctypes.CDLL("libc.so.6")
+                    PR_SET_PDEATHSIG = 1
+                    libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
+                except Exception:
+                    pass
+            preexec = _setup_child
+
         self.process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             stdin=subprocess.DEVNULL,
+            preexec_fn=preexec,
         )
 
         # Wait for socket to become available

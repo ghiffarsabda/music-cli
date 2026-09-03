@@ -337,6 +337,41 @@ def handle_config(args: argparse.Namespace) -> None:
     console.print(table)
 
 
+def handle_stop_playback() -> None:
+    """Find and terminate any active music-cli mpv playback instances."""
+    import glob
+    import os
+    import signal
+    import subprocess
+
+    killed_count = 0
+    # 1. Terminate any mpv process referencing music_cli
+    try:
+        proc = subprocess.run(["pgrep", "-f", "mpv.*music_cli"], capture_output=True, text=True)
+        if proc.returncode == 0:
+            for pid_str in proc.stdout.split():
+                if pid_str.isdigit():
+                    try:
+                        os.kill(int(pid_str), signal.SIGTERM)
+                        killed_count += 1
+                    except OSError:
+                        pass
+    except Exception:
+        pass
+
+    # 2. Clean up any leftover IPC sockets in /tmp
+    for sock in glob.glob("/tmp/music_cli_*.sock"):
+        try:
+            os.remove(sock)
+        except OSError:
+            pass
+
+    if killed_count > 0:
+        console.print(f"[bold green]✓ Stopped {killed_count} active playback process(es).[/bold green]")
+    else:
+        console.print("[yellow]No active background music playback found.[/yellow]")
+
+
 def launch_home_session() -> None:
     """Run interactive OpenCode-styled home search session loop."""
     while True:
@@ -386,7 +421,7 @@ def main() -> None:
     # Direct query convenience:
     # If the first argument is not a flag or recognized subcommand,
     # treat all non-flag arguments as a search query!
-    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "album", "home", "help"}
+    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "album", "home", "help", "stop", "kill"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
         # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics, --shuffle
@@ -533,9 +568,15 @@ Examples:
     # home subcommand
     subparsers.add_parser("home", help="Open interactive OpenCode-styled home search view")
 
+    # stop / kill subcommand
+    subparsers.add_parser("stop", help="Stop and terminate all background music playback")
+    subparsers.add_parser("kill", help="Alias for stop")
+
     args = parser.parse_args(raw_args)
 
-    if args.command == "home":
+    if args.command in ("stop", "kill"):
+        handle_stop_playback()
+    elif args.command == "home":
         launch_home_session()
     elif args.command == "playlist":
         query = " ".join(args.query).strip()

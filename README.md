@@ -86,6 +86,16 @@ music playlist "Top Hits 2024" -s
 music playlist "https://music.youtube.com/playlist?list=PL..."
 ```
 
+### 5. Stop All Background Playback
+
+Instantly stop playback and kill any background audio processes:
+
+```bash
+music stop
+# or
+music kill
+```
+
 ---
 
 ## ⌨️ Interactive Player Controls
