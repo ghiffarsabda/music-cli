@@ -106,19 +106,19 @@ While a track is playing in your terminal:
 |---|---|
 | <kbd>Space</kbd> | Toggle Play / Pause |
 | <kbd>/</kbd> or <kbd>s</kbd> | **Search while playing** (Uninterrupted playback, Play Now or Add to Queue) |
-| <kbd>Tab</kbd> or <kbd>u</kbd> | **Open Queue Manager** (View upcoming tracks, reorder, remove) |
 | <kbd>P</kbd> | **Previous track** (or replay from start if &gt;3s) |
 | <kbd>N</kbd> | **Skip to Next track** (Autoplay queue) |
 | <kbd>→</kbd> / <kbd>←</kbd> | Seek forward / backward 5 seconds |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Increase / decrease volume by 5% |
+| <kbd>↑</kbd> / <kbd>↓</kbd> | **Select track in queue** |
+| <kbd>+</kbd> / <kbd>-</kbd> | Increase / decrease volume by 5% |
 | <kbd>M</kbd> | Toggle Mute |
 | <kbd>Q</kbd> | Stop playback and quit |
 
 ---
 
-## 🎶 Queue Manager (Reorder, Remove, & Jump)
+## 🎶 Up Next Queue (Always Visible Docked View)
 
-Press <kbd>Tab</kbd> or <kbd>u</kbd> anytime during playback to open the interactive Queue Manager without interrupting audio:
+The Up Next Queue is permanently docked directly beneath the playback panel for instant queue management without interrupting playback:
 
 | Key | Action |
 |---|---|
