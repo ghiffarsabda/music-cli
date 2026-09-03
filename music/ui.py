@@ -7,7 +7,7 @@ import termios
 import threading
 import time
 import tty
-from typing import List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 from rich.align import Align
 from rich.console import Console, Group
