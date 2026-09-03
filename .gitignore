@@ -11,3 +11,6 @@ build/
 env/
 venv/
 .DS_Store
+*cookies*.txt
+*.sock
+config.json
