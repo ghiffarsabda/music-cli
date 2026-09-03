@@ -262,7 +262,7 @@ def main() -> None:
     # Direct query convenience:
     # If the first argument is not a flag or recognized subcommand,
     # treat all non-flag arguments as a search query!
-    subcommands = {"login", "config", "history", "search", "play", "url", "playlist", "help"}
+    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "help"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
         # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics, --shuffle
@@ -380,6 +380,9 @@ Examples:
     p_login.add_argument("--status", action="store_true", help="Show current authentication status")
     p_login.add_argument("--logout", action="store_true", help="Log out and return to guest mode")
 
+    # logout subcommand (convenience shortcut for music login --logout)
+    subparsers.add_parser("logout", help="Log out and return to standard guest mode")
+
     # history subcommand
     p_hist = subparsers.add_parser("history", help="Show recently played songs")
     p_hist.add_argument("-n", "--limit", type=int, default=15, help="Number of items to show")
@@ -434,6 +437,9 @@ Examples:
             handle_play_query(args.url, select_menu=False, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
     elif args.command == "login":
         handle_login(args)
+    elif args.command == "logout":
+        _, msg = logout()
+        console.print(f"[yellow]{msg}[/yellow]")
     elif args.command == "history":
         handle_history(args)
     elif args.command == "config":
