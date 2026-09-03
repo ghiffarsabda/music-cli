@@ -32,10 +32,10 @@ Just run `music` alone to launch the centered interactive search bar:
 music
 ```
 
-- 🔍 **Centered Search Bar**: Start typing any song, artist, or playlist title.
-- 📋 **Live Dropdown Suggestions**: Real-time debounced auto-complete and search results for tracks and playlists.
+- 🔍 **Centered Search Bar**: Start typing any song, artist, album, or playlist title.
+- ⚡ **Live Dropdown Suggestions**: Real-time debounced auto-complete and search results for tracks, albums, and playlists.
 - 🌊 **Asynchronous Infinite Scroll**: Keep scrolling down (<kbd>↓</kbd>) to continuously and asynchronously fetch more search results without freezing the UI.
-- 📂 **Interactive Playlist Accordion**: Highlight any playlist and hit <kbd>Tab</kbd> to expand the playlist's tracks in-place. Scroll through the songs and hit <kbd>Enter</kbd> to start playback from that track, or hit <kbd>Tab</kbd> again to collapse the accordion!
+- 📂 **Interactive Album & Playlist Accordions**: Highlight any album or playlist and hit <kbd>Tab</kbd> to expand its tracks in-place. Scroll through the songs and hit <kbd>Enter</kbd> to start playback from that track, or hit <kbd>Tab</kbd> again to collapse!
 - 🕒 **Recent History & Quick Picks**: Instant access to your recent playback history and curated popular genres when the search bar is empty.
 - 🔀 **Filter Toggling**: Press <kbd>Tab</kbd> on a song or search bar to cycle search filters (`All` ➔ `Tracks` ➔ `Playlists`).
 - ⌨️ **Intuitive Keyboard Navigation**: <kbd>↑</kbd> / <kbd>↓</kbd> to navigate, <kbd>Enter</kbd> to play instantly, <kbd>Esc</kbd> to close accordion / exit.

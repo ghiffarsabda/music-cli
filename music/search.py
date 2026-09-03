@@ -38,6 +38,22 @@ class PlaylistItem:
         return asdict(self)
 
 
+@dataclass
+class AlbumItem:
+    title: str
+    browse_id: str
+    artist: str
+    year: str = ""
+    track_count: int = 0
+    url: str = ""
+    description: str = ""
+    thumbnail: str = ""
+    audio_playlist_id: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 def format_duration(seconds: int | float | None) -> str:
     """Format seconds into MM:SS or HH:MM:SS."""
     if not seconds or seconds < 0:
@@ -85,6 +101,27 @@ def extract_playlist_id(url_or_id: str) -> Optional[str]:
     if match:
         return match.group(1)
     if clean.startswith(("VLPL", "PL", "RD", "OLAK")) and len(clean) >= 12:
+        return clean
+    return None
+
+
+def is_album_url(query: str) -> bool:
+    """Check if query is a YouTube Music album URL or browseId."""
+    clean = query.strip()
+    if "browse/MPREb_" in clean or "channel/MPREb_" in clean:
+        return True
+    if clean.startswith("MPREb_") and len(clean) >= 10:
+        return True
+    return False
+
+
+def extract_album_id(url_or_id: str) -> Optional[str]:
+    """Extract album browseId from URL or return the clean ID."""
+    clean = url_or_id.strip()
+    match = re.search(r"(MPREb_[A-Za-z0-9_-]+)", clean)
+    if match:
+        return match.group(1)
+    if clean.startswith("MPREb_") and len(clean) >= 10:
         return clean
     return None
 
@@ -403,6 +440,120 @@ def get_playlist_tracks(
         pass
 
     return None, []
+
+
+def search_albums(query: str, limit: int = 5) -> List[AlbumItem]:
+    """Search YouTube Music for albums matching the query."""
+    clean = query.strip()
+    if not clean:
+        return []
+
+    try:
+        from ytmusicapi import YTMusic
+
+        yt = YTMusic()
+        results = yt.search(clean, filter="albums", limit=limit)
+        items: List[AlbumItem] = []
+
+        for a in results:
+            bid = a.get("browseId") or ""
+            title = a.get("title", "Untitled Album")
+            artists_val = a.get("artists")
+            if isinstance(artists_val, list):
+                artist = ", ".join(art.get("name", "") for art in artists_val if isinstance(art, dict))
+            else:
+                artist = str(artists_val or "Unknown Artist")
+            year = str(a.get("year", ""))
+            thumbs = a.get("thumbnails", [])
+            thumb_url = thumbs[-1].get("url", "") if isinstance(thumbs, list) and thumbs else ""
+            url = f"https://music.youtube.com/browse/{bid}" if bid else ""
+
+            items.append(
+                AlbumItem(
+                    title=title,
+                    browse_id=bid,
+                    artist=artist or "Unknown Artist",
+                    year=year,
+                    thumbnail=thumb_url,
+                    url=url,
+                )
+            )
+
+            if len(items) >= limit:
+                break
+
+        return items
+    except Exception:
+        return []
+
+
+def get_album_tracks(browse_id: str, limit: int = 100) -> Tuple[Optional[AlbumItem], List[SongItem]]:
+    """Retrieve album metadata and tracks for a given browseId."""
+    clean_bid = extract_album_id(browse_id) or browse_id.strip()
+    if not clean_bid:
+        return None, []
+
+    try:
+        from ytmusicapi import YTMusic
+
+        yt = YTMusic()
+        details = yt.get_album(clean_bid)
+        if not details:
+            return None, []
+
+        title = details.get("title", "Untitled Album")
+        artists_val = details.get("artists")
+        if isinstance(artists_val, list):
+            artist = ", ".join(art.get("name", "") for art in artists_val if isinstance(art, dict))
+        else:
+            artist = str(artists_val or "Unknown Artist")
+        year = str(details.get("year", ""))
+        track_cnt = int(details.get("trackCount") or 0)
+        audio_pl_id = details.get("audioPlaylistId", "")
+        thumbs = details.get("thumbnails", [])
+        thumb_url = thumbs[-1].get("url", "") if isinstance(thumbs, list) and thumbs else ""
+
+        album_item = AlbumItem(
+            title=title,
+            browse_id=clean_bid,
+            artist=artist,
+            year=year,
+            track_count=track_cnt,
+            thumbnail=thumb_url,
+            url=f"https://music.youtube.com/browse/{clean_bid}",
+            audio_playlist_id=audio_pl_id,
+        )
+
+        tracks: List[SongItem] = []
+        for t in details.get("tracks", []):
+            vid = t.get("videoId")
+            if not vid:
+                continue
+            t_title = t.get("title", "Unknown Track")
+            t_artists = t.get("artists")
+            if isinstance(t_artists, list):
+                t_artist = ", ".join(art.get("name", "") for art in t_artists if isinstance(art, dict)) or artist
+            else:
+                t_artist = artist
+            dur_sec = int(t.get("duration_seconds") or 0)
+            dur_str = t.get("duration") or format_duration(dur_sec)
+            tracks.append(
+                SongItem(
+                    title=t_title,
+                    artist=t_artist,
+                    album=title,
+                    duration=dur_str,
+                    duration_seconds=dur_sec,
+                    video_id=vid,
+                    url=f"https://music.youtube.com/watch?v={vid}",
+                )
+            )
+            if len(tracks) >= limit:
+                break
+
+        return album_item, tracks
+    except Exception:
+        return None, []
 
 
 def search_ytdlp_fallback(query: str, limit: int = 5) -> List[SongItem]:

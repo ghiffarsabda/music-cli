@@ -22,14 +22,24 @@ from music.history import clear_history, get_history
 from music.home import run_home_view
 from music.player import MpvPlayer
 from music.search import (
+    extract_album_id,
+    extract_playlist_id,
+    get_album_tracks,
+    get_playlist_tracks,
+    is_album_url,
     is_playlist_url,
     is_youtube_url,
-    get_playlist_tracks,
     resolve_direct_item,
+    search_albums,
     search_music,
     search_playlists,
 )
-from music.ui import prompt_playlist_selection, prompt_song_selection, run_player_loop
+from music.ui import (
+    prompt_album_selection,
+    prompt_playlist_selection,
+    prompt_song_selection,
+    run_player_loop,
+)
 
 console = Console()
 
@@ -97,6 +107,77 @@ def handle_playlist_query(
         show_lyrics=show_lyrics,
         initial_queue=initial_queue,
         playlist_name=p_title,
+    )
+
+
+def handle_album_query(
+    query: str,
+    select_track: bool = False,
+    shuffle: bool = False,
+    autoplay: Optional[bool] = None,
+    ad_blocker: Optional[bool] = None,
+    show_lyrics: Optional[bool] = None,
+) -> None:
+    """Search for or load an album, prompt track selection if requested, and stream."""
+    clean = query.strip()
+    album_id = extract_album_id(clean)
+    album_item = None
+    tracks: List[SongItem] = []
+
+    if album_id or clean.startswith("MPREb_"):
+        with console.status(f"[bold cyan]Fetching album {clean}...[/bold cyan]"):
+            album_item, tracks = get_album_tracks(album_id or clean)
+    else:
+        with console.status(f"[bold cyan]Searching albums for: {clean}...[/bold cyan]"):
+            albums = search_albums(clean, limit=8)
+
+        if not albums:
+            console.print(f"[red]No albums found matching '{clean}'.[/red]")
+            return
+
+        if select_track and len(albums) > 1:
+            album_item = prompt_album_selection(albums)
+            if not album_item:
+                return
+        else:
+            album_item = albums[0]
+
+        with console.status(f"[bold cyan]Loading album tracks for '{album_item.title}'...[/bold cyan]"):
+            _, tracks = get_album_tracks(album_item.browse_id)
+
+    if not tracks:
+        console.print(f"[red]No tracks found in album '{album_item.title if album_item else clean}'.[/red]")
+        return
+
+    if shuffle:
+        import random
+        random.shuffle(tracks)
+
+    start_idx = 0
+    if select_track and len(tracks) > 1:
+        chosen_song = prompt_song_selection(tracks)
+        if not chosen_song:
+            return
+        for i, t in enumerate(tracks):
+            if t.video_id == chosen_song.video_id:
+                start_idx = i
+                break
+
+    start_song = tracks[start_idx]
+    initial_queue = tracks[start_idx + 1 :]
+    vol = get_config_val("volume", 80)
+    player = MpvPlayer(initial_volume=vol)
+    album_title = album_item.title if album_item else "Album"
+
+    run_player_loop(
+        start_song,
+        player,
+        enable_autoplay=autoplay,
+        enable_adblock=ad_blocker,
+        enable_lyrics=show_lyrics,
+        initial_queue=initial_queue,
+        playlist_name=f"Album: {album_title}",
+        playlist_pos=(start_idx + 1, len(tracks)),
     )
 
 
@@ -267,17 +348,24 @@ def launch_home_session() -> None:
             vol = get_config_val("volume", 80)
             player = MpvPlayer(initial_volume=vol)
             run_player_loop(target, player)
-        elif act_type == "playlist_track":
+        elif act_type in ("container_track", "playlist_track"):
             vol = get_config_val("volume", 80)
             player = MpvPlayer(initial_volume=vol)
-            initial_queue = target.full_playlist_tracks[target.track_index + 1 :]
+            p_type = getattr(target, "parent_type", "playlist").capitalize()
+            p_title = getattr(target, "parent_title", getattr(target, "playlist", None).title if hasattr(target, "playlist") else "Collection")
+            full_t = getattr(target, "full_tracks", getattr(target, "full_playlist_tracks", []))
+            initial_queue = full_t[target.track_index + 1 :]
             run_player_loop(
                 target.song,
                 player,
                 initial_queue=initial_queue,
-                playlist_name=target.playlist.title,
-                playlist_pos=(target.track_index + 1, len(target.full_playlist_tracks)),
+                playlist_name=f"{p_type}: {p_title}",
+                playlist_pos=(target.track_index + 1, len(full_t)),
             )
+        elif act_type == "album":
+            handle_album_query(target.browse_id)
+        elif act_type in ("album_url", "search_album"):
+            handle_album_query(target)
         elif act_type == "playlist":
             handle_playlist_query(target.url or target.playlist_id)
         elif act_type in ("playlist_url", "search_playlist"):
@@ -298,7 +386,7 @@ def main() -> None:
     # Direct query convenience:
     # If the first argument is not a flag or recognized subcommand,
     # treat all non-flag arguments as a search query!
-    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "home", "help"}
+    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "album", "home", "help"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
         # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics, --shuffle
@@ -399,6 +487,18 @@ Examples:
     p_plist.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
     p_plist.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
 
+    # album subcommand
+    p_alb = subparsers.add_parser("album", help="Search or stream an entire album")
+    p_alb.add_argument("query", nargs="+", help="Album name, artist, or YouTube Music album browse URL")
+    p_alb.add_argument("-s", "--select", action="store_true", help="Select starting track from album table")
+    p_alb.add_argument("--shuffle", action="store_true", help="Shuffle album tracks")
+    p_alb.add_argument("--no-autoplay", action="store_true", help="Stop playback when album ends")
+    p_alb.add_argument("--autoplay", action="store_true", help="Continue radio after album ends")
+    p_alb.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
+    p_alb.add_argument("--adblock", action="store_true", help="Force enable ad & sponsor blocking")
+    p_alb.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
+    p_alb.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
+
     p_url = subparsers.add_parser("url", help="Stream direct YouTube / YouTube Music URL")
     p_url.add_argument("url", help="Direct YouTube or YouTube Music song/playlist URL")
     p_url.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
@@ -445,6 +545,21 @@ Examples:
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
         lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
         handle_playlist_query(
+            query,
+            select_track=select_track,
+            shuffle=shuf,
+            autoplay=ap,
+            ad_blocker=adb,
+            show_lyrics=lyr,
+        )
+    elif args.command == "album":
+        query = " ".join(args.query).strip()
+        select_track = getattr(args, "select", False)
+        shuf = getattr(args, "shuffle", False)
+        ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
+        adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
+        lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
+        handle_album_query(
             query,
             select_track=select_track,
             shuffle=shuf,

@@ -26,6 +26,7 @@ from music.history import add_to_history
 from music.lyrics import LyricsData, fetch_lyrics, get_lyrics_display_window
 from music.player import MpvPlayer
 from music.search import (
+    AlbumItem,
     PlaylistItem,
     SongItem,
     format_duration,
@@ -106,6 +107,43 @@ def prompt_playlist_selection(playlists: List[PlaylistItem]) -> Optional[Playlis
             if 0 <= idx < len(playlists):
                 return playlists[idx]
             console.print(f"[red]Please enter a number between 1 and {len(playlists)}.[/red]")
+        except ValueError:
+            console.print("[red]Invalid input. Enter a valid number or 'q'.[/red]")
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+
+def prompt_album_selection(albums: List[AlbumItem]) -> Optional[AlbumItem]:
+    """Render interactive numbered table of album search results and prompt user selection."""
+    table = Table(
+        title="[bold bright_blue]Album Search Results[/bold bright_blue]",
+        box=box.ROUNDED,
+        border_style="bright_blue",
+        header_style="bold cyan",
+        show_lines=True,
+    )
+    table.add_column("#", style="bold white", width=3, justify="center")
+    table.add_column("Album Title", style="white", min_width=32)
+    table.add_column("Artist", style="yellow", min_width=20)
+    table.add_column("Year", style="cyan", width=8, justify="center")
+
+    for i, a in enumerate(albums, start=1):
+        table.add_row(str(i), a.title, a.artist, a.year or "--")
+
+    console.print(table)
+
+    while True:
+        try:
+            choice = Prompt.ask(
+                "[bold cyan]Select album #[/bold cyan] (1-" + str(len(albums)) + ", or 'q' to cancel)",
+                default="1",
+            )
+            if choice.lower() in ("q", "quit", "exit"):
+                return None
+            idx = int(choice) - 1
+            if 0 <= idx < len(albums):
+                return albums[idx]
+            console.print(f"[red]Please enter a number between 1 and {len(albums)}.[/red]")
         except ValueError:
             console.print("[red]Invalid input. Enter a valid number or 'q'.[/red]")
         except (KeyboardInterrupt, EOFError):

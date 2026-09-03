@@ -236,7 +236,34 @@ if __name__ == "__main__":
     test_player_ipc()
     test_related_tracks()
     test_adblock()
+    test_playlist()
+    test_home_view()
+
+
+def test_album():
+    from music.search import search_albums, get_album_tracks
+    albums = search_albums("parachutes coldplay", limit=2)
+    assert len(albums) > 0
+    assert albums[0].browse_id
+    assert albums[0].title
+
+    alb, tracks = get_album_tracks(albums[0].browse_id, limit=5)
+    assert alb is not None
+    assert len(tracks) > 0
+    assert tracks[0].video_id
+    print(f"✓ Album search and tracks retrieval passed: '{alb.title}' ({len(tracks)} tracks loaded)")
+
+
+if __name__ == "__main__":
+    test_duration_helpers()
+    test_history()
+    test_auth_status()
+    test_search()
+    test_player_ipc()
+    test_related_tracks()
+    test_adblock()
     test_lyrics()
     test_playlist()
+    test_album()
     test_home_view()
     print("\n🎉 ALL TESTS PASSED!")
