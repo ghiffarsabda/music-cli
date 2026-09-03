@@ -237,6 +237,9 @@ def search_ytdlp_fallback(query: str, limit: int = 5) -> List[SongItem]:
         return []
 
 
+_STREAM_URL_CACHE: Dict[str, str] = {}
+
+
 def resolve_audio_stream_url(song_item_or_url: Any) -> str:
     """Resolve direct audio stream URL (googlevideo.com) using yt-dlp for instant playback."""
     if isinstance(song_item_or_url, SongItem):
@@ -245,6 +248,9 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
     else:
         vid = extract_video_id_from_url(str(song_item_or_url))
         fallback_url = f"https://www.youtube.com/watch?v={vid}"
+
+    if vid in _STREAM_URL_CACHE:
+        return _STREAM_URL_CACHE[vid]
 
     yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
     target_url = f"https://www.youtube.com/watch?v={vid}"
@@ -263,6 +269,7 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
         if proc.returncode == 0:
             lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
             if lines:
+                _STREAM_URL_CACHE[vid] = lines[-1]
                 return lines[-1]
     except Exception:
         pass
@@ -289,6 +296,7 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
             if proc.returncode == 0:
                 lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
                 if lines:
+                    _STREAM_URL_CACHE[vid] = lines[-1]
                     return lines[-1]
         except Exception:
             pass

@@ -158,6 +158,7 @@ def render_player_panel(
     message: str = "",
     autoplay: bool = True,
     next_song: Optional[SongItem] = None,
+    is_buffered: bool = False,
 ) -> Panel:
     """Build the Rich UI Panel for current playback state."""
     state = status.get("state", "loading")
@@ -201,7 +202,8 @@ def render_player_panel(
     if song.album:
         song_info.add_row("Album:", f"[dim]{song.album}[/dim]")
     if next_song:
-        song_info.add_row("Up Next:", f"[bold cyan]{next_song.title}[/bold cyan] [dim]by {next_song.artist}[/dim]")
+        buff_status = "[bold green](⚡ Pre-buffered)[/bold green]" if is_buffered else "[dim cyan](⌛ Pre-buffering...)[/dim cyan]"
+        song_info.add_row("Up Next:", f"[bold cyan]{next_song.title}[/bold cyan] [dim]by {next_song.artist}[/dim]  {buff_status}")
     song_info.add_row("Source:", f"[dim underline]{song.url}[/dim underline]")
 
     # Progress bar calculation
@@ -264,7 +266,7 @@ def render_player_panel(
 
 
 def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] = None) -> None:
-    """Main interactive loop for song playback, autoplay queue, and keyboard control."""
+    """Main interactive loop for song playback, asynchronous prebuffering, and keyboard control."""
     auth_info = get_auth_status()
     if autoplay is None:
         autoplay = get_config_val("autoplay", True)
@@ -274,6 +276,9 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
 
     queue: List[SongItem] = []
     seen_ids = {curr_song.video_id}
+    buffered_vids = set()
+    prebuffering_vid: Optional[str] = None
+    lock = threading.Lock()
     is_fetching = False
 
     def fetch_queue(vid: str):
@@ -289,6 +294,21 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
             pass
         finally:
             is_fetching = False
+
+    def prebuffer_worker(target_song: SongItem):
+        nonlocal prebuffering_vid
+        try:
+            url = resolve_audio_stream_url(target_song)
+            with lock:
+                if player.process_is_alive() and target_song.video_id not in buffered_vids:
+                    player.append_track(url)
+                    buffered_vids.add(target_song.video_id)
+        except Exception:
+            pass
+        finally:
+            with lock:
+                if prebuffering_vid == target_song.video_id:
+                    prebuffering_vid = None
 
     # Start background queue fetching
     threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
@@ -314,6 +334,14 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                 if message and time.time() > msg_clear_time:
                     message = ""
 
+                # Asynchronous prebuffering: prebuffer upcoming track in background
+                if autoplay and queue:
+                    candidate = queue[0]
+                    with lock:
+                        if candidate.video_id not in buffered_vids and prebuffering_vid != candidate.video_id:
+                            prebuffering_vid = candidate.video_id
+                            threading.Thread(target=prebuffer_worker, args=(candidate,), daemon=True).start()
+
                 # Handle keyboard inputs
                 key = key_reader.get_key(timeout=0.08)
                 if key:
@@ -323,12 +351,25 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                         player.toggle_pause()
                     elif key in ("n", "N", ">"):
                         if queue:
-                            curr_song = queue.pop(0)
-                            message = f"Skipping to: {curr_song.title}"
-                            msg_clear_time = time.time() + 2.0
-                            add_to_history(curr_song)
-                            stream_url = resolve_audio_stream_url(curr_song)
-                            player.play(stream_url)
+                            next_track = queue[0]
+                            with lock:
+                                is_buf = next_track.video_id in buffered_vids
+                            if is_buf:
+                                # Instant switch to pre-buffered track!
+                                player.next_track()
+                                player._send_command(["playlist-remove", 0])
+                                curr_song = queue.pop(0)
+                                add_to_history(curr_song)
+                                message = f"⚡ Instant Next: {curr_song.title}"
+                                msg_clear_time = time.time() + 2.0
+                            else:
+                                curr_song = queue.pop(0)
+                                add_to_history(curr_song)
+                                stream_url = resolve_audio_stream_url(curr_song)
+                                player.play(stream_url)
+                                message = f"Skipping to: {curr_song.title}"
+                                msg_clear_time = time.time() + 2.0
+
                             if len(queue) < 4 and not is_fetching:
                                 threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
                         else:
@@ -371,9 +412,24 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                         message = "Replaying track"
                         msg_clear_time = time.time() + 1.2
 
+                # Check for automatic gapless transition from MPV
+                playlist_pos = player.get_playlist_pos()
+                if playlist_pos > 0 and queue:
+                    # mpv automatically advanced to pre-buffered track!
+                    player._send_command(["playlist-remove", 0])
+                    curr_song = queue.pop(0)
+                    add_to_history(curr_song)
+                    message = f"⚡ Instant Next: {curr_song.title}"
+                    msg_clear_time = time.time() + 2.5
+                    if len(queue) < 4 and not is_fetching:
+                        threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
+                    continue
+
                 # Refresh display
                 status = player.get_status()
                 next_track = queue[0] if queue else None
+                with lock:
+                    is_ready = bool(next_track and next_track.video_id in buffered_vids)
 
                 if status["state"] == "error":
                     live.update(
@@ -384,18 +440,28 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                             message="[Playback Error - Could not load stream]",
                             autoplay=autoplay,
                             next_song=next_track,
+                            is_buffered=is_ready,
                         )
                     )
                     time.sleep(2.0)
                     break
                 elif status["state"] == "finished":
                     if autoplay and queue:
-                        curr_song = queue.pop(0)
-                        message = f"Autoplaying: {curr_song.title}"
-                        msg_clear_time = time.time() + 2.5
-                        add_to_history(curr_song)
-                        stream_url = resolve_audio_stream_url(curr_song)
-                        player.play(stream_url)
+                        if is_ready:
+                            player.next_track()
+                            player._send_command(["playlist-remove", 0])
+                            curr_song = queue.pop(0)
+                            add_to_history(curr_song)
+                            message = f"⚡ Instant Next: {curr_song.title}"
+                            msg_clear_time = time.time() + 2.5
+                        else:
+                            curr_song = queue.pop(0)
+                            add_to_history(curr_song)
+                            stream_url = resolve_audio_stream_url(curr_song)
+                            player.play(stream_url)
+                            message = f"Autoplaying: {curr_song.title}"
+                            msg_clear_time = time.time() + 2.5
+
                         if len(queue) < 4 and not is_fetching:
                             threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
                         continue
@@ -408,6 +474,7 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                                 message="[Playback Finished]",
                                 autoplay=autoplay,
                                 next_song=next_track,
+                                is_buffered=is_ready,
                             )
                         )
                         time.sleep(1.0)
@@ -420,6 +487,7 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                     message=message,
                     autoplay=autoplay,
                     next_song=next_track,
+                    is_buffered=is_ready,
                 )
                 live.update(panel)
 

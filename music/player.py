@@ -59,6 +59,8 @@ class MpvPlayer:
             f"--script-opts=ytdl_hook-ytdl_path={yt_dlp_bin}",
             "--ytdl-raw-options-append=remote-components=ejs:github",
             "--ytdl-format=bestaudio/best",
+            "--gapless-audio=yes",
+            "--prefetch-playlist=yes",
             "--keep-open=no",
             "--force-window=no",
             "--terminal=no",
@@ -137,6 +139,29 @@ class MpvPlayer:
         self._play_start_time = time.time()
         res = self._send_command(["loadfile", url, "replace"])
         return res is not None or self.process_is_alive()
+
+    def append_track(self, url: str) -> bool:
+        """Append track to mpv playlist for seamless gapless prebuffering."""
+        res = self._send_command(["loadfile", url, "append"])
+        return res is not None
+
+    def next_track(self) -> bool:
+        """Advance immediately to next pre-buffered track in playlist."""
+        self._cached_duration = 0.0
+        self._last_time_pos = 0.0
+        self._play_start_time = time.time()
+        res = self._send_command(["playlist-next"])
+        return res is not None
+
+    def get_playlist_pos(self) -> int:
+        """Get index of currently playing item in playlist (0-indexed)."""
+        pos = self._send_command(["get_property", "playlist-pos"])
+        return int(pos) if isinstance(pos, (int, float)) else -1
+
+    def get_playlist_count(self) -> int:
+        """Get total number of tracks in mpv playlist."""
+        count = self._send_command(["get_property", "playlist-count"])
+        return int(count) if isinstance(count, (int, float)) else 0
 
     def pause(self) -> None:
         """Pause playback."""
