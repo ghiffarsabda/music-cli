@@ -459,10 +459,21 @@ def run_player_loop(
     playlist_total = (len(initial_queue) + 1) if playlist_name and initial_queue else (1 if playlist_name else 0)
     playlist_index = 1 if playlist_name else 0
 
-    buffered_vids = set()
+    buffered_song: Optional[SongItem] = None
     prebuffering_vid: Optional[str] = None
     lock = threading.Lock()
     is_fetching = False
+
+    def sync_prebuffered_track():
+        nonlocal buffered_song, prebuffering_vid
+        with lock:
+            target = queue[0] if queue else None
+            # If the currently buffered track in MPV is NOT target, purge it
+            if buffered_song is not None and (target is None or target.video_id != buffered_song.video_id):
+                if player.process_is_alive():
+                    player.clear_playlist_queue()
+                buffered_song = None
+                prebuffering_vid = None
 
     # AdBlock segments for current track
     current_segments: List[dict] = []
@@ -500,13 +511,16 @@ def run_player_loop(
             is_fetching = False
 
     def prebuffer_worker(target_song: SongItem):
-        nonlocal prebuffering_vid
+        nonlocal prebuffering_vid, buffered_song
         try:
             url = resolve_audio_stream_url(target_song)
             with lock:
-                if player.process_is_alive() and target_song.video_id not in buffered_vids:
+                # Crucial: verify target_song is STILL queue[0]!
+                if player.process_is_alive() and queue and queue[0].video_id == target_song.video_id:
+                    if player.get_playlist_count() > 1:
+                        player.clear_playlist_queue()
                     player.append_track(url)
-                    buffered_vids.add(target_song.video_id)
+                    buffered_song = target_song
         except Exception:
             pass
         finally:
@@ -549,11 +563,14 @@ def run_player_loop(
                 if queue_notif_msg and time.time() > queue_notif_clear:
                     queue_notif_msg = ""
 
+                # Synchronize buffered track with current queue
+                sync_prebuffered_track()
+
                 # Asynchronous prebuffering: prebuffer upcoming track in background
                 if (autoplay or bool(queue)) and queue:
                     candidate = queue[0]
                     with lock:
-                        if candidate.video_id not in buffered_vids and prebuffering_vid != candidate.video_id:
+                        if (buffered_song is None or buffered_song.video_id != candidate.video_id) and prebuffering_vid != candidate.video_id:
                             prebuffering_vid = candidate.video_id
                             threading.Thread(target=prebuffer_worker, args=(candidate,), daemon=True).start()
 
@@ -569,19 +586,26 @@ def run_player_loop(
                             playlist_index += 1
                             next_track = queue[0]
                             with lock:
-                                is_buf = next_track.video_id in buffered_vids
+                                is_buf = bool(buffered_song and buffered_song.video_id == next_track.video_id)
                             if is_buf:
                                 # Instant switch to pre-buffered track!
                                 player.next_track()
-                                player._send_command(["playlist-remove", 0])
+                                player.remove_track(0)
                                 curr_song = queue.pop(0)
+                                with lock:
+                                    buffered_song = None
+                                    prebuffering_vid = None
                                 add_to_history(curr_song)
                                 threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                                 threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                                 message = f"⚡ Instant Next: {curr_song.title}"
                                 msg_clear_time = time.time() + 2.0
                             else:
+                                player.clear_playlist_queue()
                                 curr_song = queue.pop(0)
+                                with lock:
+                                    buffered_song = None
+                                    prebuffering_vid = None
                                 add_to_history(curr_song)
                                 threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                                 threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
@@ -623,13 +647,16 @@ def run_player_loop(
                                     queue = list(remaining)
                                 add_to_history(curr_song)
                                 stream_url = resolve_audio_stream_url(curr_song)
+                                player.clear_playlist_queue()
                                 player.play(stream_url)
-                                buffered_vids.clear()
-                                prebuffering_vid = None
+                                with lock:
+                                    buffered_song = None
+                                    prebuffering_vid = None
                                 threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                                 threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                                 message = f"▶ Playing: {curr_song.title}"
                                 msg_clear_time = time.time() + 2.5
+                            sync_prebuffered_track()
                     elif key in ("tab", "\t", "u", "U"):
                         show_queue = not show_queue
                         queue_selected_idx = 0
@@ -651,12 +678,14 @@ def run_player_loop(
                         if queue and queue_selected_idx > 0:
                             queue[queue_selected_idx], queue[queue_selected_idx - 1] = queue[queue_selected_idx - 1], queue[queue_selected_idx]
                             queue_selected_idx -= 1
+                            sync_prebuffered_track()
                             queue_notif_msg = f"[bold green]▲ Moved up: {_truncate_text(queue[queue_selected_idx].title, 26)}[/bold green]"
                             queue_notif_clear = time.time() + 1.5
                     elif show_queue and key in ("shift_down", "J", "j"):
                         if queue and queue_selected_idx < len(queue) - 1:
                             queue[queue_selected_idx], queue[queue_selected_idx + 1] = queue[queue_selected_idx + 1], queue[queue_selected_idx]
                             queue_selected_idx += 1
+                            sync_prebuffered_track()
                             queue_notif_msg = f"[bold green]▼ Moved down: {_truncate_text(queue[queue_selected_idx].title, 26)}[/bold green]"
                             queue_notif_clear = time.time() + 1.5
                     elif show_queue and key in ("x", "X", "delete", "backspace", "d", "D"):
@@ -664,6 +693,7 @@ def run_player_loop(
                             removed = queue.pop(queue_selected_idx)
                             if queue_selected_idx >= len(queue):
                                 queue_selected_idx = max(0, len(queue) - 1)
+                            sync_prebuffered_track()
                             queue_notif_msg = f"[bold yellow]✗ Removed: {_truncate_text(removed.title, 26)}[/bold yellow]"
                             queue_notif_clear = time.time() + 1.5
                     elif show_queue and key in ("c", "C"):
@@ -671,6 +701,7 @@ def run_player_loop(
                             queue.clear()
                             queue_selected_idx = 0
                             queue_scroll_offset = 0
+                            sync_prebuffered_track()
                             queue_notif_msg = "[bold red]✓ Queue cleared[/bold red]"
                             queue_notif_clear = time.time() + 1.5
                     elif show_queue and key in ("enter", "\r", "\n"):
@@ -678,9 +709,12 @@ def run_player_loop(
                             curr_song = queue.pop(queue_selected_idx)
                             add_to_history(curr_song)
                             stream_url = resolve_audio_stream_url(curr_song)
+                            player.clear_playlist_queue()
                             player.play(stream_url)
-                            buffered_vids.clear()
-                            prebuffering_vid = None
+                            with lock:
+                                buffered_song = None
+                                prebuffering_vid = None
+                            sync_prebuffered_track()
                             threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                             threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                             message = f"▶ Playing: {curr_song.title}"
@@ -745,8 +779,11 @@ def run_player_loop(
                 if playlist_pos > 0 and queue:
                     playlist_index += 1
                     # mpv automatically advanced to pre-buffered track!
-                    player._send_command(["playlist-remove", 0])
+                    player.remove_track(0)
                     curr_song = queue.pop(0)
+                    with lock:
+                        buffered_song = None
+                        prebuffering_vid = None
                     add_to_history(curr_song)
                     threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                     threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
@@ -766,7 +803,7 @@ def run_player_loop(
 
                 next_track = queue[0] if queue else None
                 with lock:
-                    is_ready = bool(next_track and next_track.video_id in buffered_vids)
+                    is_ready = bool(next_track and buffered_song and buffered_song.video_id == next_track.video_id)
 
                 # Calculate lyrics display window
                 lyrics_win = None
@@ -797,17 +834,26 @@ def run_player_loop(
                 elif status["state"] == "finished":
                     if (autoplay or bool(queue)) and queue:
                         playlist_index += 1
+                        with lock:
+                            is_ready = bool(buffered_song and buffered_song.video_id == queue[0].video_id)
                         if is_ready:
                             player.next_track()
-                            player._send_command(["playlist-remove", 0])
+                            player.remove_track(0)
                             curr_song = queue.pop(0)
+                            with lock:
+                                buffered_song = None
+                                prebuffering_vid = None
                             add_to_history(curr_song)
                             threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                             threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                             message = f"⚡ Instant Next: {curr_song.title}"
                             msg_clear_time = time.time() + 2.5
                         else:
+                            player.clear_playlist_queue()
                             curr_song = queue.pop(0)
+                            with lock:
+                                buffered_song = None
+                                prebuffering_vid = None
                             add_to_history(curr_song)
                             threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                             threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()

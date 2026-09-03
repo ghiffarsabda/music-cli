@@ -179,6 +179,16 @@ class MpvPlayer:
         count = self._send_command(["get_property", "playlist-count"])
         return int(count) if isinstance(count, (int, float)) else 0
 
+    def remove_track(self, index: int) -> bool:
+        """Remove a track at the specified index from the mpv playlist."""
+        res = self._send_command(["playlist-remove", index])
+        return res is not None
+
+    def clear_playlist_queue(self) -> bool:
+        """Remove all buffered tracks from playlist, keeping only currently playing track."""
+        res = self._send_command(["playlist-clear"])
+        return res is not None
+
     def pause(self) -> None:
         """Pause playback."""
         self._send_command(["set_property", "pause", True])

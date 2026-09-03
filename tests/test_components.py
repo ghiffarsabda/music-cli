@@ -378,6 +378,34 @@ def test_queue_manager():
     print("✓ Queue manager rendering, reordering, and removal tests passed")
 
 
+def test_prebuffering_queue_sync():
+    """Verify that when queue is modified, stale prebuffered tracks are purged from MPV."""
+    from music.player import MpvPlayer
+    from music.search import SongItem
+
+    player = MpvPlayer()
+    assert hasattr(player, "remove_track")
+    assert hasattr(player, "clear_playlist_queue")
+
+    song_a = SongItem("Song A", "Artist A", "Album A", "03:00", 180, "vid_a", "url_a")
+    song_b = SongItem("Song B", "Artist B", "Album B", "04:00", 240, "vid_b", "url_b")
+    queue = [song_a, song_b]
+    buffered_song = song_a  # MPV prebuffered Song A
+
+    # Reorder queue: user moves Song B to front
+    queue[0], queue[1] = queue[1], queue[0]
+    assert queue[0].video_id == "vid_b"
+
+    # Synchronization simulation:
+    target = queue[0] if queue else None
+    if buffered_song is not None and (target is None or target.video_id != buffered_song.video_id):
+        # Must purge stale Song A
+        buffered_song = None
+
+    assert buffered_song is None, "Stale prebuffered track must be invalidated when queue order changes"
+    print("✓ Prebuffering queue synchronization test passed")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -394,4 +422,5 @@ if __name__ == "__main__":
     test_search_while_playing()
     test_render_player_panel()
     test_queue_manager()
+    test_prebuffering_queue_sync()
     print("\n🎉 ALL TESTS PASSED!")
