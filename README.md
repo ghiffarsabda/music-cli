@@ -107,14 +107,11 @@ While a track is playing in your terminal:
 | <kbd>Space</kbd> | Toggle Play / Pause |
 | <kbd>/</kbd> or <kbd>s</kbd> | **Search while playing** (Uninterrupted playback, Play Now or Add to Queue) |
 | <kbd>Tab</kbd> or <kbd>u</kbd> | **Open Queue Manager** (View upcoming tracks, reorder, remove) |
-| <kbd>n</kbd> / <kbd>&gt;</kbd> | **Skip to Next track** (Autoplay queue) |
-| <kbd>a</kbd> | **Toggle Autoplay ON / OFF** |
-| <kbd>b</kbd> | **Toggle AdBlock ON / OFF** |
-| <kbd>l</kbd> | **Toggle Synced Lyrics ON / OFF** |
+| <kbd>n</kbd> | **Skip to Next track** (Autoplay queue) |
 | <kbd>→</kbd> / <kbd>←</kbd> | Seek forward / backward 5 seconds |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Increase / decrease volume by 5% |
+| <kbd>&lt;</kbd> / <kbd>&gt;</kbd> (or <kbd>,</kbd> / <kbd>.</kbd>) | Fine-tune Lyrics sync timing (±0.5s) |
 | <kbd>m</kbd> | Toggle Mute |
-| <kbd>r</kbd> | Replay current track from start |
 | <kbd>q</kbd> | Stop playback and quit |
 
 ---

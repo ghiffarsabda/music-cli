@@ -321,9 +321,6 @@ def render_player_panel(
         r"[bold white][←/→][/bold white] ±5s   "
         r"[bold white][↑/↓][/bold white] Vol   "
         r"[bold white][m][/bold white] Mute   "
-        r"[bold white][a][/bold white] Autoplay   "
-        r"[bold white][b][/bold white] AdBlock   "
-        r"[bold white][l][/bold white] Lyrics   "
         r"[bold white][q][/bold white] Quit"
     )
 
@@ -523,8 +520,6 @@ def run_player_loop(
     threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
     threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
 
-    if not player.process_is_alive():
-        console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{curr_song.title}[/bold white]...")
     stream_url = resolve_audio_stream_url(curr_song)
 
     try:
@@ -544,6 +539,7 @@ def run_player_loop(
     QUEUE_PAGE_SIZE = 5
     queue_notif_msg = ""
     queue_notif_clear = 0.0
+    lyrics_offset = float(get_config_val("lyrics_offset", 1.2))
 
     with KeyReader() as key_reader:
         with Live(console=console, refresh_per_second=10, transient=False) as live:
@@ -744,6 +740,14 @@ def run_player_loop(
                         player.restart()
                         message = "Replaying track"
                         msg_clear_time = time.time() + 1.2
+                    elif key in (",", "<"):
+                        lyrics_offset -= 0.5
+                        message = f"🎤 Lyrics Sync: {lyrics_offset:+.1f}s"
+                        msg_clear_time = time.time() + 1.5
+                    elif key in (".", ">"):
+                        lyrics_offset += 0.5
+                        message = f"🎤 Lyrics Sync: {lyrics_offset:+.1f}s"
+                        msg_clear_time = time.time() + 1.5
 
                 # Check for automatic gapless transition from MPV
                 playlist_pos = player.get_playlist_pos()
@@ -776,7 +780,7 @@ def run_player_loop(
                 # Calculate lyrics display window
                 lyrics_win = None
                 if show_lyrics:
-                    lyrics_win, _ = get_lyrics_display_window(current_lyrics, status.get("time_pos", 0.0))
+                    lyrics_win, _ = get_lyrics_display_window(current_lyrics, status.get("time_pos", 0.0), offset=lyrics_offset)
 
                 cur_pos_str = f"({playlist_index}/{playlist_total})" if playlist_total else ""
 

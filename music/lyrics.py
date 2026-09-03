@@ -165,6 +165,7 @@ def fetch_lyrics(
 def get_lyrics_display_window(
     lyrics: Optional[LyricsData],
     time_pos: float,
+    offset: float = 1.2,
 ) -> Tuple[List[Tuple[str, str]], str]:
     """Calculate 3-line teleprompter display window based on current playback timestamp.
 
@@ -182,9 +183,10 @@ def get_lyrics_display_window(
         return [(l, "dim") for l in sample], "static"
 
     lines = lyrics.lines
+    effective_time = max(0.0, time_pos + offset)
 
     # Before first line is sung
-    if time_pos < lines[0].timestamp:
+    if effective_time < lines[0].timestamp:
         first_text = lines[0].text
         return [
             ("♪ (Instrumental Intro) ♪", "dim italic"),
@@ -194,7 +196,7 @@ def get_lyrics_display_window(
     # Find the current line index
     active_idx = 0
     for i, line in enumerate(lines):
-        if line.timestamp <= time_pos:
+        if line.timestamp <= effective_time:
             active_idx = i
         else:
             break
