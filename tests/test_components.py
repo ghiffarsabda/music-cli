@@ -153,6 +153,20 @@ def test_lyrics():
     print("✓ Time-synchronized lyrics engine tests passed")
 
 
+def test_playlist():
+    from music.search import is_playlist_url, extract_playlist_id, search_playlists, get_playlist_tracks
+    url = "https://music.youtube.com/playlist?list=PLOzDu-MXXLljymo0oXEkTSLKf5TqxY-JN"
+    assert is_playlist_url(url)
+    assert extract_playlist_id(url) == "PLOzDu-MXXLljymo0oXEkTSLKf5TqxY-JN"
+
+    p_item, tracks = get_playlist_tracks("PLOzDu-MXXLljymo0oXEkTSLKf5TqxY-JN", limit=5)
+    assert p_item is not None
+    assert p_item.title
+    assert len(tracks) > 0
+    assert tracks[0].video_id
+    print(f"✓ Playlist loading tests passed: '{p_item.title}' ({len(tracks)} tracks loaded)")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -162,4 +176,5 @@ if __name__ == "__main__":
     test_related_tracks()
     test_adblock()
     test_lyrics()
+    test_playlist()
     print("\n🎉 ALL TESTS PASSED!")

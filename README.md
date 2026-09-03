@@ -50,6 +50,24 @@ music search "Hotel California"
 music url "https://music.youtube.com/watch?v=dQw4w9WgXcQ"
 ```
 
+### 4. Play from a Selected Playlist
+
+Stream entire YouTube Music playlists with gapless transitions and live track indicators (`Playlist: <Title> (3/20)`):
+
+```bash
+# Search for playlists and pick one from an interactive table
+music playlist "Lofi Hip Hop"
+
+# Play a playlist in random/shuffle mode
+music playlist "Synthwave Chill" --shuffle
+
+# Pick a specific starting song from the playlist
+music playlist "Top Hits 2024" -s
+
+# Stream directly from a YouTube or YouTube Music playlist URL
+music playlist "https://music.youtube.com/playlist?list=PL..."
+```
+
 ---
 
 ## ⌨️ Interactive Player Controls

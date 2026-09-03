@@ -20,10 +20,83 @@ from music.auth import (
 from music.config import get_config_val, load_config, set_config_val
 from music.history import clear_history, get_history
 from music.player import MpvPlayer
-from music.search import is_youtube_url, resolve_direct_item, search_music
-from music.ui import prompt_song_selection, run_player_loop
+from music.search import (
+    is_playlist_url,
+    is_youtube_url,
+    get_playlist_tracks,
+    resolve_direct_item,
+    search_music,
+    search_playlists,
+)
+from music.ui import prompt_playlist_selection, prompt_song_selection, run_player_loop
 
 console = Console()
+
+
+def handle_playlist_query(
+    query: str,
+    select_track: bool = False,
+    shuffle: bool = False,
+    autoplay: Optional[bool] = None,
+    ad_blocker: Optional[bool] = None,
+    show_lyrics: Optional[bool] = None,
+) -> None:
+    """Search for or load a playlist, prompt track selection if requested, and stream."""
+    import random
+
+    clean_q = query.strip()
+    p_item = None
+    tracks = []
+
+    if is_playlist_url(clean_q):
+        console.print("[cyan]Loading playlist from URL...[/cyan]")
+        p_item, tracks = get_playlist_tracks(clean_q)
+    else:
+        console.print(f"[cyan]Searching YouTube Music for playlists:[/cyan] [bold white]{clean_q}[/bold white]...")
+        results = search_playlists(clean_q, limit=6)
+        if not results:
+            console.print("[red]No playlists found matching your query.[/red]")
+            return
+
+        selected_playlist = prompt_playlist_selection(results)
+        if not selected_playlist:
+            return
+
+        console.print(f"[cyan]Fetching tracks for:[/cyan] [bold white]{selected_playlist.title}[/bold white]...")
+        p_item, tracks = get_playlist_tracks(selected_playlist.playlist_id)
+
+    if not tracks:
+        console.print("[red]No playable tracks found in playlist.[/red]")
+        return
+
+    p_title = p_item.title if p_item else "Playlist"
+    console.print(f"[green]✓ Loaded playlist:[/green] [bold white]{p_title}[/bold white] ([cyan]{len(tracks)} tracks[/cyan])")
+
+    if shuffle:
+        console.print("[dim]🔀 Shuffling tracks...[/dim]")
+        random.shuffle(tracks)
+
+    if select_track:
+        start_song = prompt_song_selection(tracks)
+        if not start_song:
+            return
+        idx = tracks.index(start_song)
+        initial_queue = tracks[idx + 1:]
+    else:
+        start_song = tracks[0]
+        initial_queue = tracks[1:]
+
+    vol = get_config_val("volume", 80)
+    player = MpvPlayer(initial_volume=vol)
+    run_player_loop(
+        start_song,
+        player,
+        autoplay=autoplay,
+        ad_blocker=ad_blocker,
+        show_lyrics=show_lyrics,
+        initial_queue=initial_queue,
+        playlist_name=p_title,
+    )
 
 
 def handle_play_query(
@@ -34,6 +107,16 @@ def handle_play_query(
     show_lyrics: Optional[bool] = None,
 ) -> None:
     """Search for query and start playback."""
+    if is_playlist_url(query):
+        handle_playlist_query(
+            query,
+            select_track=select_menu,
+            autoplay=autoplay,
+            ad_blocker=ad_blocker,
+            show_lyrics=show_lyrics,
+        )
+        return
+
     if is_youtube_url(query):
         console.print(f"[cyan]Resolving direct YouTube link...[/cyan]")
         item = resolve_direct_item(query)
@@ -179,14 +262,15 @@ def main() -> None:
     # Direct query convenience:
     # If the first argument is not a flag or recognized subcommand,
     # treat all non-flag arguments as a search query!
-    subcommands = {"login", "config", "history", "search", "play", "url", "help"}
+    subcommands = {"login", "config", "history", "search", "play", "url", "playlist", "help"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
-        # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics
+        # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics, --shuffle
         select_menu = False
         autoplay = None
         ad_blocker = None
         show_lyrics = None
+        shuffle = False
         words = []
         for a in raw_args:
             if a in ("-s", "--select"):
@@ -203,17 +287,29 @@ def main() -> None:
                 show_lyrics = False
             elif a == "--lyrics":
                 show_lyrics = True
+            elif a in ("--shuffle",):
+                shuffle = True
             else:
                 words.append(a)
         query = " ".join(words).strip()
         if query:
-            handle_play_query(
-                query,
-                select_menu=select_menu,
-                autoplay=autoplay,
-                ad_blocker=ad_blocker,
-                show_lyrics=show_lyrics,
-            )
+            if is_playlist_url(query):
+                handle_playlist_query(
+                    query,
+                    select_track=select_menu,
+                    shuffle=shuffle,
+                    autoplay=autoplay,
+                    ad_blocker=ad_blocker,
+                    show_lyrics=show_lyrics,
+                )
+            else:
+                handle_play_query(
+                    query,
+                    select_menu=select_menu,
+                    autoplay=autoplay,
+                    ad_blocker=ad_blocker,
+                    show_lyrics=show_lyrics,
+                )
             return
 
     parser = argparse.ArgumentParser(
@@ -224,12 +320,10 @@ def main() -> None:
 Examples:
   music "Never Gonna Give You Up"          # Play top match with synced lyrics & autoplay
   music "Bohemian Rhapsody" -s             # Show search results list to pick from
-  music search "Daft Punk"                 # Interactive search menu
-  music url "https://music.youtube.com/..." # Stream direct URL
+  music playlist "Lofi Hip Hop"            # Search and play a selected playlist
+  music playlist "Synthwave" --shuffle     # Play a playlist shuffled
+  music url "https://music.youtube.com/..." # Stream direct song or playlist URL
   music login                              # Interactive login (hyperlink & account selector)
-  music login --open                       # Open Google Account Chooser in browser
-  music login --cookies cookies.txt        # Authenticate with cookies.txt
-  music login --status                     # Check current login status
   music history                            # View and replay recently played songs
         """,
     )
@@ -248,7 +342,8 @@ Examples:
     p_play.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
 
     p_search = subparsers.add_parser("search", help="Search YouTube Music and select from list")
-    p_search.add_argument("query", nargs="+", help="Song title or query to search")
+    p_search.add_argument("query", nargs="+", help="Song or playlist query to search")
+    p_search.add_argument("-p", "--playlist", action="store_true", help="Search for playlists instead of individual tracks")
     p_search.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
     p_search.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
     p_search.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
@@ -256,8 +351,20 @@ Examples:
     p_search.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
     p_search.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
 
+    # playlist subcommand
+    p_plist = subparsers.add_parser("playlist", help="Search or stream a selected playlist")
+    p_plist.add_argument("query", nargs="+", help="Playlist name or direct playlist URL")
+    p_plist.add_argument("-s", "--select", action="store_true", help="Select starting track from playlist table")
+    p_plist.add_argument("--shuffle", action="store_true", help="Shuffle playlist tracks")
+    p_plist.add_argument("--no-autoplay", action="store_true", help="Stop playback when playlist ends")
+    p_plist.add_argument("--autoplay", action="store_true", help="Continue radio after playlist ends")
+    p_plist.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
+    p_plist.add_argument("--adblock", action="store_true", help="Force enable ad & sponsor blocking")
+    p_plist.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
+    p_plist.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
+
     p_url = subparsers.add_parser("url", help="Stream direct YouTube / YouTube Music URL")
-    p_url.add_argument("url", help="Direct YouTube or YouTube Music URL")
+    p_url.add_argument("url", help="Direct YouTube or YouTube Music song/playlist URL")
     p_url.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
     p_url.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
     p_url.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
@@ -286,18 +393,45 @@ Examples:
 
     args = parser.parse_args(raw_args)
 
-    if args.command in ("play", "search"):
+    if args.command == "playlist":
+        query = " ".join(args.query).strip()
+        select_track = getattr(args, "select", False)
+        shuf = getattr(args, "shuffle", False)
+        ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
+        adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
+        lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
+        handle_playlist_query(
+            query,
+            select_track=select_track,
+            shuffle=shuf,
+            autoplay=ap,
+            ad_blocker=adb,
+            show_lyrics=lyr,
+        )
+    elif args.command in ("play", "search"):
         query = " ".join(args.query).strip()
         select_menu = getattr(args, "select", False) or args.command == "search"
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
         lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
-        handle_play_query(query, select_menu=select_menu, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
+        if getattr(args, "playlist", False) or is_playlist_url(query):
+            handle_playlist_query(
+                query,
+                select_track=select_menu,
+                autoplay=ap,
+                ad_blocker=adb,
+                show_lyrics=lyr,
+            )
+        else:
+            handle_play_query(query, select_menu=select_menu, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
     elif args.command == "url":
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
         lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
-        handle_play_query(args.url, select_menu=False, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
+        if is_playlist_url(args.url):
+            handle_playlist_query(args.url, select_track=False, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
+        else:
+            handle_play_query(args.url, select_menu=False, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
     elif args.command == "login":
         handle_login(args)
     elif args.command == "history":

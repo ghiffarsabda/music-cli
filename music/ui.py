@@ -26,6 +26,7 @@ from music.history import add_to_history
 from music.lyrics import LyricsData, fetch_lyrics, get_lyrics_display_window
 from music.player import MpvPlayer
 from music.search import (
+    PlaylistItem,
     SongItem,
     format_duration,
     get_related_tracks,
@@ -67,6 +68,44 @@ def prompt_song_selection(songs: List[SongItem]) -> Optional[SongItem]:
             if 0 <= idx < len(songs):
                 return songs[idx]
             console.print(f"[red]Please enter a number between 1 and {len(songs)}.[/red]")
+        except ValueError:
+            console.print("[red]Invalid input. Enter a valid number or 'q'.[/red]")
+        except (KeyboardInterrupt, EOFError):
+            return None
+
+
+def prompt_playlist_selection(playlists: List[PlaylistItem]) -> Optional[PlaylistItem]:
+    """Render interactive numbered table of playlist search results and prompt user selection."""
+    table = Table(
+        title="[bold bright_blue]Playlist Search Results[/bold bright_blue]",
+        box=box.ROUNDED,
+        border_style="bright_blue",
+        header_style="bold cyan",
+        show_lines=True,
+    )
+    table.add_column("#", style="bold white", width=3, justify="center")
+    table.add_column("Playlist Title", style="white", min_width=32)
+    table.add_column("Author / Curator", style="yellow", min_width=20)
+    table.add_column("Tracks", style="cyan", width=8, justify="right")
+
+    for i, p in enumerate(playlists, start=1):
+        count_str = str(p.track_count) if p.track_count > 0 else "--"
+        table.add_row(str(i), p.title, p.author, count_str)
+
+    console.print(table)
+
+    while True:
+        try:
+            choice = Prompt.ask(
+                "[bold cyan]Select playlist #[/bold cyan] (1-" + str(len(playlists)) + ", or 'q' to cancel)",
+                default="1",
+            )
+            if choice.lower() in ("q", "quit", "exit"):
+                return None
+            idx = int(choice) - 1
+            if 0 <= idx < len(playlists):
+                return playlists[idx]
+            console.print(f"[red]Please enter a number between 1 and {len(playlists)}.[/red]")
         except ValueError:
             console.print("[red]Invalid input. Enter a valid number or 'q'.[/red]")
         except (KeyboardInterrupt, EOFError):
@@ -143,6 +182,8 @@ def render_player_panel(
     ad_blocker: bool = True,
     show_lyrics: bool = True,
     lyrics_window: Optional[List[Tuple[str, str]]] = None,
+    playlist_name: Optional[str] = None,
+    playlist_pos: str = "",
 ) -> Panel:
     """Build the Rich UI Panel for current playback state."""
     state = status.get("state", "loading")
@@ -191,6 +232,9 @@ def render_player_panel(
     song_info.add_row("Artist:", f"[bold yellow]{song.artist}[/bold yellow]")
     if song.album:
         song_info.add_row("Album:", f"[dim]{song.album}[/dim]")
+    if playlist_name:
+        pos_str = f" [dim]{playlist_pos}[/dim]" if playlist_pos else ""
+        song_info.add_row("Playlist:", f"[bold cyan]{playlist_name}[/bold cyan]{pos_str}")
     if next_song:
         buff_status = "[bold green](⚡ Pre-buffered)[/bold green]" if is_buffered else "[dim cyan](⌛ Pre-buffering...)[/dim cyan]"
         song_info.add_row("Up Next:", f"[bold cyan]{next_song.title}[/bold cyan] [dim]by {next_song.artist}[/dim]  {buff_status}")
@@ -279,6 +323,8 @@ def run_player_loop(
     autoplay: Optional[bool] = None,
     ad_blocker: Optional[bool] = None,
     show_lyrics: Optional[bool] = None,
+    initial_queue: Optional[List[SongItem]] = None,
+    playlist_name: Optional[str] = None,
 ) -> None:
     """Main interactive loop for playback, prebuffering, ad-blocking, synced lyrics, and keyboard control."""
     auth_info = get_auth_status()
@@ -292,8 +338,11 @@ def run_player_loop(
     curr_song = song
     add_to_history(curr_song)
 
-    queue: List[SongItem] = []
-    seen_ids = {curr_song.video_id}
+    queue: List[SongItem] = list(initial_queue) if initial_queue else []
+    seen_ids = {curr_song.video_id} | {s.video_id for s in queue}
+    playlist_total = (len(initial_queue) + 1) if playlist_name and initial_queue else (1 if playlist_name else 0)
+    playlist_index = 1 if playlist_name else 0
+
     buffered_vids = set()
     prebuffering_vid: Optional[str] = None
     lock = threading.Lock()
@@ -349,8 +398,9 @@ def run_player_loop(
                 if prebuffering_vid == target_song.video_id:
                     prebuffering_vid = None
 
-    # Start background queue, ad-block segments, and lyrics fetching
-    threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
+    # Start background queue only if not populated by a playlist
+    if not initial_queue:
+        threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
     threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
     threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
 
@@ -376,7 +426,7 @@ def run_player_loop(
                     message = ""
 
                 # Asynchronous prebuffering: prebuffer upcoming track in background
-                if autoplay and queue:
+                if (autoplay or bool(queue)) and queue:
                     candidate = queue[0]
                     with lock:
                         if candidate.video_id not in buffered_vids and prebuffering_vid != candidate.video_id:
@@ -392,6 +442,7 @@ def run_player_loop(
                         player.toggle_pause()
                     elif key in ("n", "N", ">"):
                         if queue:
+                            playlist_index += 1
                             next_track = queue[0]
                             with lock:
                                 is_buf = next_track.video_id in buffered_vids
@@ -468,6 +519,7 @@ def run_player_loop(
                 # Check for automatic gapless transition from MPV
                 playlist_pos = player.get_playlist_pos()
                 if playlist_pos > 0 and queue:
+                    playlist_index += 1
                     # mpv automatically advanced to pre-buffered track!
                     player._send_command(["playlist-remove", 0])
                     curr_song = queue.pop(0)
@@ -497,6 +549,8 @@ def run_player_loop(
                 if show_lyrics:
                     lyrics_win, _ = get_lyrics_display_window(current_lyrics, status.get("time_pos", 0.0))
 
+                cur_pos_str = f"({playlist_index}/{playlist_total})" if playlist_total else ""
+
                 if status["state"] == "error":
                     live.update(
                         render_player_panel(
@@ -510,12 +564,15 @@ def run_player_loop(
                             ad_blocker=ad_blocker,
                             show_lyrics=show_lyrics,
                             lyrics_window=lyrics_win,
+                            playlist_name=playlist_name,
+                            playlist_pos=cur_pos_str,
                         )
                     )
                     time.sleep(2.0)
                     break
                 elif status["state"] == "finished":
-                    if autoplay and queue:
+                    if (autoplay or bool(queue)) and queue:
+                        playlist_index += 1
                         if is_ready:
                             player.next_track()
                             player._send_command(["playlist-remove", 0])
@@ -551,6 +608,8 @@ def run_player_loop(
                                 ad_blocker=ad_blocker,
                                 show_lyrics=show_lyrics,
                                 lyrics_window=lyrics_win,
+                                playlist_name=playlist_name,
+                                playlist_pos=cur_pos_str,
                             )
                         )
                         time.sleep(1.0)
@@ -567,6 +626,8 @@ def run_player_loop(
                     ad_blocker=ad_blocker,
                     show_lyrics=show_lyrics,
                     lyrics_window=lyrics_win,
+                    playlist_name=playlist_name,
+                    playlist_pos=cur_pos_str,
                 )
                 live.update(panel)
 

@@ -4,7 +4,7 @@ import json
 import re
 import subprocess
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from music.config import get_config_val
 
@@ -18,6 +18,20 @@ class SongItem:
     duration_seconds: int
     video_id: str
     url: str
+    thumbnail: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PlaylistItem:
+    title: str
+    playlist_id: str
+    author: str
+    track_count: int
+    url: str
+    description: str = ""
     thumbnail: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -52,6 +66,27 @@ def parse_duration_str(dur_str: str) -> int:
     except ValueError:
         pass
     return 0
+
+
+def is_playlist_url(query: str) -> bool:
+    """Check if query is a YouTube / YouTube Music playlist URL or playlist ID."""
+    clean = query.strip()
+    if re.search(r"[?&]list=[A-Za-z0-9_-]+", clean):
+        return True
+    if clean.startswith(("VLPL", "PL", "RDCLAK", "OLAK5uy_")) and len(clean) >= 12:
+        return True
+    return False
+
+
+def extract_playlist_id(url_or_id: str) -> Optional[str]:
+    """Extract playlist ID from URL or return the clean ID."""
+    clean = url_or_id.strip()
+    match = re.search(r"[?&]list=([A-Za-z0-9_-]+)", clean)
+    if match:
+        return match.group(1)
+    if clean.startswith(("VLPL", "PL", "RD", "OLAK")) and len(clean) >= 12:
+        return clean
+    return None
 
 
 def is_youtube_url(query: str) -> bool:
@@ -190,6 +225,184 @@ def search_music(query: str, limit: int = 5) -> List[SongItem]:
 
     # Fallback to yt-dlp search
     return search_ytdlp_fallback(query, limit)
+
+
+def search_playlists(query: str, limit: int = 5) -> List[PlaylistItem]:
+    """Search YouTube Music for playlists matching the query."""
+    if is_playlist_url(query):
+        pid = extract_playlist_id(query)
+        if pid:
+            item, _ = get_playlist_tracks(pid, limit=1)
+            return [item] if item else []
+
+    try:
+        from ytmusicapi import YTMusic
+
+        yt = YTMusic()
+        results = yt.search(query, filter="playlists")
+        items: List[PlaylistItem] = []
+
+        for p in results:
+            pid = p.get("browseId") or ""
+            clean_pid = pid[2:] if pid.startswith("VL") else pid
+            title = p.get("title", "Untitled Playlist")
+            author_val = p.get("author")
+            if isinstance(author_val, list):
+                author = ", ".join(a.get("name", "") for a in author_val if isinstance(a, dict))
+            else:
+                author = str(author_val or "YouTube Music")
+
+            count_val = p.get("itemCount")
+            try:
+                count = int(count_val) if count_val else 0
+            except (ValueError, TypeError):
+                count = 0
+
+            thumbs = p.get("thumbnails", [])
+            thumb_url = thumbs[-1].get("url", "") if isinstance(thumbs, list) and thumbs else ""
+
+            items.append(
+                PlaylistItem(
+                    title=title,
+                    playlist_id=clean_pid or pid,
+                    author=author or "YouTube Music",
+                    track_count=count,
+                    url=f"https://music.youtube.com/playlist?list={clean_pid or pid}",
+                    thumbnail=thumb_url,
+                )
+            )
+
+            if len(items) >= limit:
+                break
+
+        if items:
+            return items
+    except Exception:
+        pass
+
+    return []
+
+
+def get_playlist_tracks(
+    playlist_id_or_url: str,
+    limit: int = 100,
+) -> Tuple[Optional[PlaylistItem], List[SongItem]]:
+    """Retrieve full track list and metadata for a playlist."""
+    pid = extract_playlist_id(playlist_id_or_url) or playlist_id_or_url.strip()
+
+    # Attempt 1: ytmusicapi
+    try:
+        from ytmusicapi import YTMusic
+
+        yt = YTMusic()
+        p_data = yt.get_playlist(pid, limit=limit)
+        title = p_data.get("title", "YouTube Playlist")
+        author_data = p_data.get("author", {})
+        if isinstance(author_data, dict):
+            author = author_data.get("name", "YouTube Music")
+        else:
+            author = str(author_data or "YouTube Music")
+
+        track_count = int(p_data.get("trackCount") or len(p_data.get("tracks", [])))
+        desc = p_data.get("description") or ""
+        thumbs = p_data.get("thumbnails", [])
+        thumb_url = thumbs[-1].get("url", "") if isinstance(thumbs, list) and thumbs else ""
+
+        p_item = PlaylistItem(
+            title=title,
+            playlist_id=pid,
+            author=author,
+            track_count=track_count,
+            url=f"https://music.youtube.com/playlist?list={pid}",
+            description=desc,
+            thumbnail=thumb_url,
+        )
+
+        tracks: List[SongItem] = []
+        for t in p_data.get("tracks", []):
+            vid = t.get("videoId")
+            if not vid:
+                continue
+
+            t_title = t.get("title", "Unknown Title")
+            artists = t.get("artists", [])
+            if isinstance(artists, list):
+                artist = ", ".join(a.get("name", "") for a in artists if isinstance(a, dict)) or author
+            else:
+                artist = str(artists or author)
+
+            album_data = t.get("album")
+            album = album_data.get("name", "") if isinstance(album_data, dict) else (str(album_data) if album_data else "")
+            dur_str = t.get("duration", "")
+            dur_sec = t.get("duration_seconds") or parse_duration_str(dur_str)
+
+            t_thumbs = t.get("thumbnails", [])
+            t_thumb = t_thumbs[-1].get("url", "") if isinstance(t_thumbs, list) and t_thumbs else ""
+
+            tracks.append(
+                SongItem(
+                    title=t_title,
+                    artist=artist,
+                    album=album,
+                    duration=dur_str or format_duration(dur_sec),
+                    duration_seconds=int(dur_sec or 0),
+                    video_id=vid,
+                    url=f"https://www.youtube.com/watch?v={vid}",
+                    thumbnail=t_thumb,
+                )
+            )
+
+        if tracks:
+            return p_item, tracks
+    except Exception:
+        pass
+
+    # Attempt 2: Fallback to yt-dlp
+    try:
+        yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+        playlist_url = f"https://www.youtube.com/playlist?list={pid}"
+        cmd = [yt_dlp, "--flat-playlist", "-J", "--skip-download", playlist_url]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout)
+            title = data.get("title", "YouTube Playlist")
+            author = data.get("uploader") or data.get("channel", "YouTube")
+            entries = data.get("entries", [])
+
+            p_item = PlaylistItem(
+                title=title,
+                playlist_id=pid,
+                author=author,
+                track_count=len(entries),
+                url=playlist_url,
+            )
+
+            tracks = []
+            for e in entries:
+                vid = e.get("id")
+                if not vid:
+                    continue
+                e_title = e.get("title", "Unknown Title")
+                e_artist = e.get("uploader") or e.get("channel", author)
+                dur_sec = int(e.get("duration") or 0)
+                tracks.append(
+                    SongItem(
+                        title=e_title,
+                        artist=e_artist,
+                        album="",
+                        duration=format_duration(dur_sec),
+                        duration_seconds=dur_sec,
+                        video_id=vid,
+                        url=f"https://www.youtube.com/watch?v={vid}",
+                    )
+                )
+
+            if tracks:
+                return p_item, tracks
+    except Exception:
+        pass
+
+    return None, []
 
 
 def search_ytdlp_fallback(query: str, limit: int = 5) -> List[SongItem]:
