@@ -523,7 +523,8 @@ def run_player_loop(
     threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
     threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
 
-    console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{curr_song.title}[/bold white]...")
+    if not player.process_is_alive():
+        console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{curr_song.title}[/bold white]...")
     stream_url = resolve_audio_stream_url(curr_song)
 
     try:
