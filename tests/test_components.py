@@ -1,0 +1,96 @@
+"""Unit and integration tests for music-cli."""
+
+import time
+from music.config import load_config, set_config_val
+from music.search import search_music, format_duration, parse_duration_str, SongItem
+from music.history import add_to_history, get_history, clear_history
+from music.player import MpvPlayer
+from music.auth import get_auth_status, logout
+
+
+def test_duration_helpers():
+    assert format_duration(65) == "01:05"
+    assert format_duration(3665) == "01:01:05"
+    assert format_duration(0) == "00:00"
+    assert parse_duration_str("03:45") == 225
+    assert parse_duration_str("01:02:03") == 3723
+    print("✓ Duration helper tests passed")
+
+
+def test_history():
+    clear_history()
+    assert len(get_history()) == 0
+
+    item = SongItem(
+        title="Test Song",
+        artist="Test Artist",
+        album="Test Album",
+        duration="03:00",
+        duration_seconds=180,
+        video_id="test1234567",
+        url="https://music.youtube.com/watch?v=test1234567",
+    )
+    add_to_history(item)
+    hist = get_history()
+    assert len(hist) == 1
+    assert hist[0].title == "Test Song"
+    clear_history()
+    print("✓ History management tests passed")
+
+
+def test_auth_status():
+    logout()
+    status = get_auth_status()
+    assert status["mode"] == "none"
+    print("✓ Auth status tests passed")
+
+
+def test_search():
+    results = search_music("Rick Astley Never Gonna Give You Up", limit=3)
+    assert len(results) > 0, "No search results returned"
+    first = results[0]
+    assert first.title, "Empty title in search result"
+    assert first.video_id, "Empty videoId in search result"
+    assert "youtube.com" in first.url
+    print(f"✓ Search test passed: Found '{first.title}' by '{first.artist}' (ID: {first.video_id})")
+
+
+def test_player_ipc():
+    player = MpvPlayer(initial_volume=70)
+    try:
+        player.start()
+        assert player.process_is_alive()
+
+        # Check initial volume
+        vol = player.get_volume()
+        assert vol == 70
+
+        # Change volume
+        new_vol = player.adjust_volume(10)
+        assert new_vol == 80
+        assert player.get_volume() == 80
+
+        # Mute toggle
+        player.toggle_mute()
+        time.sleep(0.1)
+        st = player.get_status()
+        assert st["muted"] is True
+
+        player.toggle_mute()
+        time.sleep(0.1)
+        st = player.get_status()
+        assert st["muted"] is False
+
+        print("✓ Player IPC socket tests passed")
+    finally:
+        player.stop()
+        assert not player.process_is_alive()
+
+
+if __name__ == "__main__":
+    test_duration_helpers()
+    test_history()
+    test_auth_status()
+    test_search()
+    test_player_ipc()
+    print("\n🎉 ALL TESTS PASSED!")
