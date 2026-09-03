@@ -3,6 +3,8 @@
 import json
 import re
 import subprocess
+import threading
+import time
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -605,6 +607,95 @@ def search_ytdlp_fallback(query: str, limit: int = 5) -> List[SongItem]:
 
 
 _STREAM_URL_CACHE: Dict[str, str] = {}
+_STREAM_TTL_CACHE: Dict[str, Tuple[str, float]] = {}
+_STREAM_LOCK = threading.Lock()
+
+
+def get_cached_stream_url(video_id: str) -> Optional[str]:
+    """Return cached direct audio stream URL if within 5-minute TTL."""
+    clean_vid = extract_video_id_from_url(video_id)
+    with _STREAM_LOCK:
+        if clean_vid in _STREAM_TTL_CACHE:
+            url, expiry = _STREAM_TTL_CACHE[clean_vid]
+            if time.time() < expiry:
+                return url
+            del _STREAM_TTL_CACHE[clean_vid]
+        return _STREAM_URL_CACHE.get(clean_vid)
+
+
+def set_cached_stream_url(video_id: str, url: str, ttl: float = 300.0) -> None:
+    """Store direct audio stream URL with 5-minute TTL."""
+    clean_vid = extract_video_id_from_url(video_id)
+    with _STREAM_LOCK:
+        _STREAM_URL_CACHE[clean_vid] = url
+        _STREAM_TTL_CACHE[clean_vid] = (url, time.time() + ttl)
+
+
+class StreamPrewarmer:
+    """Background daemon pre-resolving audio stream URLs for high-confidence tracks."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._active_proc: Optional[subprocess.Popen] = None
+        self._active_vid: Optional[str] = None
+        self._thread: Optional[threading.Thread] = None
+
+    def prewarm(self, video_id: str) -> None:
+        """Pre-warm audio stream URL in background if not already cached."""
+        clean_vid = extract_video_id_from_url(video_id)
+        if not clean_vid or get_cached_stream_url(clean_vid):
+            return
+
+        with self._lock:
+            if self._active_vid == clean_vid:
+                return
+            self._cancel_locked()
+            self._active_vid = clean_vid
+
+        def _worker(vid: str):
+            try:
+                yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+                cmd = [yt_dlp, "-f", "ba/b", "-g", "--no-warnings", f"https://www.youtube.com/watch?v={vid}"]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                with self._lock:
+                    if self._active_vid != vid:
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                        return
+                    self._active_proc = proc
+                out, _ = proc.communicate(timeout=10)
+                if proc.returncode == 0:
+                    lines = [l.strip() for l in out.splitlines() if l.strip().startswith("http")]
+                    if lines:
+                        set_cached_stream_url(vid, lines[-1])
+            except Exception:
+                pass
+            finally:
+                with self._lock:
+                    if self._active_vid == vid:
+                        self._active_vid = None
+                        self._active_proc = None
+
+        t = threading.Thread(target=_worker, args=(clean_vid,), daemon=True)
+        with self._lock:
+            self._thread = t
+        t.start()
+
+    def _cancel_locked(self) -> None:
+        if self._active_proc:
+            try:
+                self._active_proc.terminate()
+            except Exception:
+                pass
+            self._active_proc = None
+        self._active_vid = None
+
+    def cancel(self) -> None:
+        """Immediately cancel in-flight stream extraction."""
+        with self._lock:
+            self._cancel_locked()
 
 
 def resolve_audio_stream_url(song_item_or_url: Any) -> str:
@@ -616,8 +707,9 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
         vid = extract_video_id_from_url(str(song_item_or_url))
         fallback_url = f"https://www.youtube.com/watch?v={vid}"
 
-    if vid in _STREAM_URL_CACHE:
-        return _STREAM_URL_CACHE[vid]
+    cached_url = get_cached_stream_url(vid)
+    if cached_url:
+        return cached_url
 
     yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
     target_url = f"https://www.youtube.com/watch?v={vid}"
@@ -636,7 +728,7 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
         if proc.returncode == 0:
             lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
             if lines:
-                _STREAM_URL_CACHE[vid] = lines[-1]
+                set_cached_stream_url(vid, lines[-1])
                 return lines[-1]
     except Exception:
         pass

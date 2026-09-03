@@ -23,11 +23,13 @@ from rich.text import Text
 from music.cache import get_cached_search, set_cached_search
 from music.config import get_config_val
 from music.history import get_history, search_history
+from music.library import get_recent_tracks, search_local_library
 from music.player import MpvPlayer
 from music.search import (
     AlbumItem,
     PlaylistItem,
     SongItem,
+    StreamPrewarmer,
     get_album_tracks,
     get_playlist_tracks,
     is_album_url,
@@ -140,7 +142,10 @@ def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
 
     local_items: List[DropdownItem] = []
     if filter_mode in ("All", "Tracks"):
-        hist_songs = search_history(clean_q, limit=4)
+        try:
+            hist_songs = search_local_library(clean_q, limit=4)
+        except Exception:
+            hist_songs = search_history(clean_q, limit=4)
         for s in hist_songs:
             local_items.append(
                 DropdownItem(
@@ -176,8 +181,11 @@ def get_default_items() -> List[DropdownItem]:
     """Return default quick-pick items: recent history + popular genres/presets."""
     items: List[DropdownItem] = []
 
-    # 1. Recent History
-    recent_songs = get_history(limit=4)
+    # 1. Recent History from local SQLite library
+    try:
+        recent_songs = get_recent_tracks(limit=4)
+    except Exception:
+        recent_songs = get_history(limit=4)
     for s in recent_songs:
         items.append(
             DropdownItem(
@@ -645,6 +653,8 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
     is_loading_more = False
     has_more = True
     expanded_container_id: Optional[str] = None
+    session_cache: Dict[str, List[DropdownItem]] = {}
+    prewarmer = StreamPrewarmer()
 
     last_key_time = 0.0
     last_searched_query = ""
@@ -654,9 +664,9 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
 
     # Background initial search debounced worker
     def initial_search_worker():
-        nonlocal items, is_searching, last_searched_query, last_searched_mode, seen_ids, current_limit, has_more, scroll_offset, selected_idx, expanded_container_id
+        nonlocal items, is_searching, last_searched_query, last_searched_mode, seen_ids, current_limit, has_more, scroll_offset, selected_idx, expanded_container_id, session_cache
         while running:
-            time.sleep(0.04)
+            time.sleep(0.03)
             current_q = query.strip()
             current_mode = filter_modes[filter_idx]
 
@@ -675,7 +685,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                         expanded_container_id = None
                 continue
 
-            if (current_q != last_searched_query or current_mode != last_searched_mode) and (time.time() - last_key_time > 0.22):
+            if (current_q != last_searched_query or current_mode != last_searched_mode) and (time.time() - last_key_time > 0.18):
                 new_seen = set()
                 new_items = fetch_dropdown_results(current_q, current_mode, limit=15, seen_ids=new_seen)
                 with lock:
@@ -686,6 +696,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     last_searched_query = current_q
                     last_searched_mode = current_mode
                     is_searching = False
+                    session_cache[current_q.lower()] = new_items
                     scroll_offset = 0
                     selected_idx = 0
                     expanded_container_id = None
@@ -746,9 +757,19 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 )
                 live.update(screen)
 
+                # M3: Pre-warm top high-confidence stream URL if user paused typing for >= 400ms on query >= 3 chars
+                if not searching and (time.time() - last_key_time >= 0.40) and len(query.strip()) >= 3:
+                    if curr_items and 0 <= selected_idx < len(curr_items):
+                        cand = curr_items[selected_idx]
+                        if cand.kind in ("track", "history") and hasattr(cand.data, "video_id"):
+                            prewarmer.prewarm(cand.data.video_id)
+
                 key = key_reader.get_key(timeout=0.06)
                 if not key:
                     continue
+
+                # Any keystroke cancels in-flight pre-warmer to save bandwidth/CPU
+                prewarmer.cancel()
 
                 if key in ("escape", "quit"):
                     if expanded_container_id is not None:
@@ -1056,9 +1077,14 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 elif key in ("\x7f", "\x08", "backspace"):
                     if query:
                         query = query[:-1]
+                        clean_low = query.strip().lower()
+                        cached_items = session_cache.get(clean_low)
                         local_matches = fetch_local_matches(query, filter_modes[filter_idx])
                         with lock:
-                            if local_matches:
+                            if cached_items:
+                                items = cached_items
+                                is_searching = False
+                            elif local_matches:
                                 items = local_matches
                                 is_searching = True
                             elif query.strip():
@@ -1083,9 +1109,25 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
 
                 elif len(key) == 1 and key.isprintable():
                     query += key
+                    clean_low = query.strip().lower()
+
+                    # M2: In-memory prefix narrowing across active session results in RAM (0ms)
+                    narrowed = []
+                    for base_q in sorted(session_cache.keys(), key=len, reverse=True):
+                        if clean_low.startswith(base_q):
+                            base_items = session_cache[base_q]
+                            narrowed = [
+                                it for it in base_items
+                                if clean_low in it.title.lower() or clean_low in it.subtitle.lower()
+                            ]
+                            if narrowed:
+                                break
+
                     local_matches = fetch_local_matches(query, filter_modes[filter_idx])
                     with lock:
-                        if local_matches:
+                        if narrowed:
+                            items = narrowed
+                        elif local_matches:
                             items = local_matches
                         is_searching = True
                         expanded_container_id = None

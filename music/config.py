@@ -10,6 +10,7 @@ CONFIG_DIR = Path.home() / ".config" / "music-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 COOKIES_FILE = CONFIG_DIR / "cookies.txt"
 HISTORY_FILE = CONFIG_DIR / "history.json"
+LIBRARY_DB = CONFIG_DIR / "library.db"
 
 
 def detect_executable(name: str, fallback_paths: list[str] | None = None) -> str:
