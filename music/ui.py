@@ -326,7 +326,7 @@ def render_player_panel(
     # Keybinds footer
     controls = Text.from_markup(
         r"[bold white][Space][/bold white] Play/Pause   "
-        r"[bold white][/][/bold white] Search   "
+        r"[bold white]\[/][/bold white] Search   "
         r"[bold white][n][/bold white] Next   "
         r"[bold white][←/→][/bold white] ±5s   "
         r"[bold white][↑/↓][/bold white] Vol   "

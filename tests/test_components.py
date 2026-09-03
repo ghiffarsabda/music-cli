@@ -308,6 +308,20 @@ def test_search_while_playing():
     print("✓ Search while playing UI & action dialog tests passed")
 
 
+def test_render_player_panel():
+    """Verify player dashboard panel renders without Rich markup syntax errors."""
+    from music.ui import render_player_panel
+    from music.search import SongItem
+
+    s = SongItem("Test Title", "Test Artist", "Test Album", "03:45", 225, "vid_test", "https://youtube.com")
+    status = {"state": "playing", "time_pos": 45.0, "duration": 225.0, "volume": 80, "mute": False}
+    auth = {"mode": "guest", "description": "Guest Mode", "ad_free": False}
+
+    panel = render_player_panel(s, status, auth, message="Testing message")
+    assert panel is not None
+    print("✓ Player panel Rich markup rendering verified")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -322,4 +336,5 @@ if __name__ == "__main__":
     test_cache_and_offline_search()
     test_home_view()
     test_search_while_playing()
+    test_render_player_panel()
     print("\n🎉 ALL TESTS PASSED!")
