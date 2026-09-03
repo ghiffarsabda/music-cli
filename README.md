@@ -61,11 +61,30 @@ While a track is playing in your terminal:
 | <kbd>Space</kbd> | Toggle Play / Pause |
 | <kbd>n</kbd> / <kbd>&gt;</kbd> | **Skip to Next track** (Autoplay queue) |
 | <kbd>a</kbd> | **Toggle Autoplay ON / OFF** |
+| <kbd>b</kbd> | **Toggle AdBlock ON / OFF** |
 | <kbd>→</kbd> / <kbd>←</kbd> | Seek forward / backward 5 seconds |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Increase / decrease volume by 5% |
 | <kbd>m</kbd> | Toggle Mute |
 | <kbd>r</kbd> | Replay current track from start |
 | <kbd>q</kbd> | Stop playback and quit |
+
+---
+
+## 🛡️ Built-in Ad Blocker (uBlock & SponsorBlock Integration)
+
+`music-cli` comes with **out-of-the-box ad blocking enabled by default**:
+1. **Direct Stream Media Extraction**: YouTube video ads (pre-roll, mid-roll, post-roll) are eliminated because `music-cli` extracts only the media audio stream directly from YouTube CDN (`googlevideo.com`).
+2. **In-Stream Sponsor & Ad Skipping**: Automatically detects and skips sponsored segments ("This song is brought to you by..."), self-promotions, interaction reminders, and non-music video intros/skits using the community-verified SponsorBlock database.
+3. **Domain Blocklist**: Blocks DoubleClick, Google AdSense, and telemetry endpoints inspired by uBlock Origin / EasyList filters.
+
+Toggle dynamically during playback by pressing <kbd>b</kbd>, or disable via `--no-adblock`:
+```bash
+# Disable ad blocker for a session
+music "Bohemian Rhapsody" --no-adblock
+
+# Toggle globally
+music config set ad_blocker false
+```
 
 ---
 

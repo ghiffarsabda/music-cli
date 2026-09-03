@@ -18,6 +18,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.text import Text
 
+from music.adblock import check_and_skip_ads, fetch_skip_segments
 from music.auth import get_auth_status
 from music.config import get_config_val
 from music.history import add_to_history
@@ -159,6 +160,7 @@ def render_player_panel(
     autoplay: bool = True,
     next_song: Optional[SongItem] = None,
     is_buffered: bool = False,
+    ad_blocker: bool = True,
 ) -> Panel:
     """Build the Rich UI Panel for current playback state."""
     state = status.get("state", "loading")
@@ -189,8 +191,11 @@ def render_player_panel(
     # Autoplay badge
     autoplay_badge = "[bold green]∞ Autoplay ON[/bold green]" if autoplay else "[dim]∞ Autoplay OFF[/dim]"
 
+    # AdBlock badge
+    adblock_badge = "[bold green]🛡️ AdBlock ON[/bold green]" if ad_blocker else "[dim]🛡️ AdBlock OFF[/dim]"
+
     # Header line
-    header_text = Text.from_markup(f"  {state_badge}    [dim]•[/dim]    {auth_badge}    [dim]•[/dim]    {autoplay_badge}")
+    header_text = Text.from_markup(f"  {state_badge}    [dim]•[/dim]    {auth_badge}    [dim]•[/dim]    {autoplay_badge}    [dim]•[/dim]    {adblock_badge}")
 
     # Song details
     song_info = Table.grid(padding=(0, 2))
@@ -235,6 +240,7 @@ def render_player_panel(
         r"[bold white][↑/↓][/bold white] Vol   "
         r"[bold white][m][/bold white] Mute   "
         r"[bold white][a][/bold white] Autoplay   "
+        r"[bold white][b][/bold white] AdBlock   "
         r"[bold white][q][/bold white] Quit"
     )
 
@@ -265,11 +271,18 @@ def render_player_panel(
     )
 
 
-def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] = None) -> None:
-    """Main interactive loop for song playback, asynchronous prebuffering, and keyboard control."""
+def run_player_loop(
+    song: SongItem,
+    player: MpvPlayer,
+    autoplay: Optional[bool] = None,
+    ad_blocker: Optional[bool] = None,
+) -> None:
+    """Main interactive loop for song playback, asynchronous prebuffering, ad-blocking, and keyboard control."""
     auth_info = get_auth_status()
     if autoplay is None:
         autoplay = get_config_val("autoplay", True)
+    if ad_blocker is None:
+        ad_blocker = get_config_val("ad_blocker", True)
 
     curr_song = song
     add_to_history(curr_song)
@@ -280,6 +293,15 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
     prebuffering_vid: Optional[str] = None
     lock = threading.Lock()
     is_fetching = False
+
+    # AdBlock segments for current track
+    current_segments: List[dict] = []
+    skipped_ranges = set()
+
+    def fetch_segments(vid: str):
+        nonlocal current_segments, skipped_ranges
+        skipped_ranges = set()
+        current_segments = fetch_skip_segments(vid)
 
     def fetch_queue(vid: str):
         nonlocal is_fetching
@@ -310,8 +332,9 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                 if prebuffering_vid == target_song.video_id:
                     prebuffering_vid = None
 
-    # Start background queue fetching
+    # Start background queue and ad-block segment fetching
     threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
+    threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
 
     console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{curr_song.title}[/bold white]...")
     stream_url = resolve_audio_stream_url(curr_song)
@@ -360,11 +383,13 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                                 player._send_command(["playlist-remove", 0])
                                 curr_song = queue.pop(0)
                                 add_to_history(curr_song)
+                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                                 message = f"⚡ Instant Next: {curr_song.title}"
                                 msg_clear_time = time.time() + 2.0
                             else:
                                 curr_song = queue.pop(0)
                                 add_to_history(curr_song)
+                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                                 stream_url = resolve_audio_stream_url(curr_song)
                                 player.play(stream_url)
                                 message = f"Skipping to: {curr_song.title}"
@@ -378,6 +403,10 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                     elif key in ("a", "A"):
                         autoplay = not autoplay
                         message = f"Autoplay {'ON' if autoplay else 'OFF'}"
+                        msg_clear_time = time.time() + 1.5
+                    elif key in ("b", "B"):
+                        ad_blocker = not ad_blocker
+                        message = f"🛡️ AdBlock {'ON' if ad_blocker else 'OFF'}"
                         msg_clear_time = time.time() + 1.5
                     elif key == "right":
                         player.seek(5)
@@ -419,14 +448,21 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                     player._send_command(["playlist-remove", 0])
                     curr_song = queue.pop(0)
                     add_to_history(curr_song)
+                    threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                     message = f"⚡ Instant Next: {curr_song.title}"
                     msg_clear_time = time.time() + 2.5
                     if len(queue) < 4 and not is_fetching:
                         threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
                     continue
 
-                # Refresh display
+                # Refresh display & run real-time AdBlock skipping
                 status = player.get_status()
+                if ad_blocker and current_segments and status.get("state") == "playing":
+                    skip_msg = check_and_skip_ads(player, status.get("time_pos", 0.0), current_segments, skipped_ranges)
+                    if skip_msg:
+                        message = skip_msg
+                        msg_clear_time = time.time() + 2.5
+
                 next_track = queue[0] if queue else None
                 with lock:
                     is_ready = bool(next_track and next_track.video_id in buffered_vids)
@@ -441,6 +477,7 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                             autoplay=autoplay,
                             next_song=next_track,
                             is_buffered=is_ready,
+                            ad_blocker=ad_blocker,
                         )
                     )
                     time.sleep(2.0)
@@ -452,11 +489,13 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                             player._send_command(["playlist-remove", 0])
                             curr_song = queue.pop(0)
                             add_to_history(curr_song)
+                            threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                             message = f"⚡ Instant Next: {curr_song.title}"
                             msg_clear_time = time.time() + 2.5
                         else:
                             curr_song = queue.pop(0)
                             add_to_history(curr_song)
+                            threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
                             stream_url = resolve_audio_stream_url(curr_song)
                             player.play(stream_url)
                             message = f"Autoplaying: {curr_song.title}"
@@ -475,6 +514,7 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                                 autoplay=autoplay,
                                 next_song=next_track,
                                 is_buffered=is_ready,
+                                ad_blocker=ad_blocker,
                             )
                         )
                         time.sleep(1.0)
@@ -488,6 +528,7 @@ def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] 
                     autoplay=autoplay,
                     next_song=next_track,
                     is_buffered=is_ready,
+                    ad_blocker=ad_blocker,
                 )
                 live.update(panel)
 

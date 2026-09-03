@@ -96,6 +96,36 @@ def test_related_tracks():
     print(f"✓ Autoplay related tracks test passed: Next up is '{tracks[0].title}' by '{tracks[0].artist}'")
 
 
+def test_adblock():
+    from music.adblock import is_ad_domain, fetch_skip_segments, check_and_skip_ads
+    assert is_ad_domain("https://googleads.g.doubleclick.net/pagead/id")
+    assert is_ad_domain("https://pagead2.googlesyndication.com/ad")
+    assert not is_ad_domain("https://rr4---sn-2uuxa3vh.googlevideo.com/videoplayback")
+
+    # Test segment skipping logic on mock player
+    class MockPlayer:
+        def __init__(self):
+            self.sought = None
+        def seek_to(self, target):
+            self.sought = target
+
+    p = MockPlayer()
+    segments = [{"category": "sponsor", "label": "Sponsor segment", "start": 30.0, "end": 45.0, "duration": 15.0}]
+    skipped = set()
+
+    # Time before segment: no skip
+    msg = check_and_skip_ads(p, 25.0, segments, skipped)
+    assert msg is None
+    assert p.sought is None
+
+    # Time inside segment: skips to end!
+    msg = check_and_skip_ads(p, 32.5, segments, skipped)
+    assert msg is not None
+    assert "Sponsor segment" in msg
+    assert p.sought == 45.1
+    print("✓ Built-in adblocker and SponsorBlock test passed")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -103,4 +133,5 @@ if __name__ == "__main__":
     test_search()
     test_player_ipc()
     test_related_tracks()
+    test_adblock()
     print("\n🎉 ALL TESTS PASSED!")
