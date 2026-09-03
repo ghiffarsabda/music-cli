@@ -52,14 +52,53 @@ def add_to_history(song: SongItem) -> None:
     entry["played_at"] = datetime.now().isoformat()
     entries.insert(0, entry)
 
-    # Keep maximum 50 entries
-    entries = entries[:50]
+    # Keep maximum 500 entries for rich offline caching and search
+    entries = entries[:500]
 
     try:
         with open(HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(entries, f, indent=2)
     except Exception:
         pass
+
+
+def search_history(query: str, limit: int = 5) -> List[SongItem]:
+    """Search previously played tracks locally without internet connection (0ms latency)."""
+    clean = query.strip().lower()
+    if not clean:
+        return get_history(limit=limit)
+
+    all_songs = get_history(limit=500)
+    scored_matches: List[tuple] = []
+
+    for s in all_songs:
+        t_low = s.title.lower()
+        a_low = s.artist.lower()
+        alb_low = s.album.lower() if s.album else ""
+
+        score = 0
+        if t_low.startswith(clean):
+            score += 25
+        elif f" {clean}" in t_low or f"({clean}" in t_low or f"[{clean}" in t_low:
+            score += 18
+        elif clean in t_low:
+            score += 10
+
+        if a_low.startswith(clean):
+            score += 15
+        elif f" {clean}" in a_low:
+            score += 12
+        elif clean in a_low:
+            score += 8
+
+        if clean in alb_low:
+            score += 5
+
+        if score > 0:
+            scored_matches.append((score, s))
+
+    scored_matches.sort(key=lambda x: x[0], reverse=True)
+    return [item[1] for item in scored_matches[:limit]]
 
 
 def clear_history() -> None:

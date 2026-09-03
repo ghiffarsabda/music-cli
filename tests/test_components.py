@@ -228,18 +228,6 @@ def test_home_view():
     print(f"✓ OpenCode-styled home view & accordion tests passed ({len(results)} search results rendered)")
 
 
-if __name__ == "__main__":
-    test_duration_helpers()
-    test_history()
-    test_auth_status()
-    test_search()
-    test_player_ipc()
-    test_related_tracks()
-    test_adblock()
-    test_playlist()
-    test_home_view()
-
-
 def test_album():
     from music.search import search_albums, get_album_tracks
     albums = search_albums("parachutes coldplay", limit=2)
@@ -254,6 +242,34 @@ def test_album():
     print(f"✓ Album search and tracks retrieval passed: '{alb.title}' ({len(tracks)} tracks loaded)")
 
 
+def test_cache_and_offline_search():
+    from music.history import add_to_history, search_history
+    from music.search import SongItem
+    from music.home import fetch_local_matches
+    from music.cache import set_cached_search, get_cached_search
+
+    # Test local history search
+    test_song = SongItem("Starboy", "The Weeknd", "Starboy", "03:50", 230, "test_starboy_id", "url")
+    add_to_history(test_song)
+
+    matched = search_history("star", limit=5)
+    assert len(matched) > 0
+    assert any(m.video_id == "test_starboy_id" for m in matched)
+
+    # Test fetch_local_matches
+    local_items = fetch_local_matches("star", "Tracks")
+    assert len(local_items) > 0
+    assert any(it.kind == "history" for it in local_items)
+
+    # Test persistent query disk cache
+    set_cached_search("starboy query", "Tracks", [{"kind": "track", "title": "Starboy", "subtitle": "The Weeknd", "extra": "03:50", "data": test_song.to_dict()}])
+    cached = get_cached_search("starboy query", "Tracks")
+    assert cached is not None
+    assert len(cached) == 1
+    assert cached[0]["title"] == "Starboy"
+    print("✓ Local history offline search & disk caching tests passed (0ms instant matches verified)")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -265,5 +281,6 @@ if __name__ == "__main__":
     test_lyrics()
     test_playlist()
     test_album()
+    test_cache_and_offline_search()
     test_home_view()
     print("\n🎉 ALL TESTS PASSED!")

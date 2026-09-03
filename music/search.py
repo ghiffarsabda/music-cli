@@ -126,6 +126,19 @@ def extract_album_id(url_or_id: str) -> Optional[str]:
     return None
 
 
+_YTMUSIC_CLIENT = None
+
+
+def get_ytmusic_client() -> Any:
+    """Return reusable singleton YTMusic client to reuse internal HTTP connection pool."""
+    global _YTMUSIC_CLIENT
+    if _YTMUSIC_CLIENT is None:
+        from ytmusicapi import YTMusic
+
+        _YTMUSIC_CLIENT = YTMusic()
+    return _YTMUSIC_CLIENT
+
+
 def is_youtube_url(query: str) -> bool:
     """Check if query is a direct YouTube or YouTube Music URL or ID."""
     clean = query.strip()
@@ -205,9 +218,7 @@ def search_music(query: str, limit: int = 5) -> List[SongItem]:
 
     # Attempt search via ytmusicapi first (best for accurate songs/artists)
     try:
-        from ytmusicapi import YTMusic
-
-        yt = YTMusic()
+        yt = get_ytmusic_client()
         # Search songs
         results = yt.search(query, filter="songs", limit=limit)
         if not results:
@@ -273,9 +284,7 @@ def search_playlists(query: str, limit: int = 5) -> List[PlaylistItem]:
             return [item] if item else []
 
     try:
-        from ytmusicapi import YTMusic
-
-        yt = YTMusic()
+        yt = get_ytmusic_client()
         results = yt.search(query, filter="playlists", limit=limit)
         items: List[PlaylistItem] = []
 
@@ -329,9 +338,7 @@ def get_playlist_tracks(
 
     # Attempt 1: ytmusicapi
     try:
-        from ytmusicapi import YTMusic
-
-        yt = YTMusic()
+        yt = get_ytmusic_client()
         p_data = yt.get_playlist(pid, limit=limit)
         title = p_data.get("title", "YouTube Playlist")
         author_data = p_data.get("author", {})
@@ -449,9 +456,7 @@ def search_albums(query: str, limit: int = 5) -> List[AlbumItem]:
         return []
 
     try:
-        from ytmusicapi import YTMusic
-
-        yt = YTMusic()
+        yt = get_ytmusic_client()
         results = yt.search(clean, filter="albums", limit=limit)
         items: List[AlbumItem] = []
 
@@ -494,9 +499,7 @@ def get_album_tracks(browse_id: str, limit: int = 100) -> Tuple[Optional[AlbumIt
         return None, []
 
     try:
-        from ytmusicapi import YTMusic
-
-        yt = YTMusic()
+        yt = get_ytmusic_client()
         details = yt.get_album(clean_bid)
         if not details:
             return None, []
@@ -673,9 +676,7 @@ def get_related_tracks(video_id: str, limit: int = 20) -> List[SongItem]:
     clean_vid = extract_video_id_from_url(video_id)
 
     try:
-        from ytmusicapi import YTMusic
-
-        yt = YTMusic()
+        yt = get_ytmusic_client()
         watch_data = yt.get_watch_playlist(videoId=clean_vid, limit=limit + 5)
         tracks = watch_data.get("tracks", [])
 
