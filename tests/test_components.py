@@ -192,7 +192,40 @@ def test_home_view():
     results = fetch_dropdown_results("lofi", "Tracks")
     assert len(results) > 0
     assert any(r.kind == "track" for r in results)
-    print(f"✓ OpenCode-styled home view tests passed ({len(results)} search results rendered)")
+
+    # Test Accordion logic
+    from music.home import collapse_playlist_accordion, DropdownItem, PlaylistTrackData
+    from music.search import SongItem, PlaylistItem
+
+    pl = PlaylistItem("Test PL", "PL001", "Author", 2, "url")
+    s1 = SongItem("Track 1", "Artist", "", "03:00", 180, "v1", "u1")
+    s2 = SongItem("Track 2", "Artist", "", "03:30", 210, "v2", "u2")
+    sample_items = [
+        DropdownItem("playlist", pl.title, pl.author, "2 tracks", pl),
+        DropdownItem("playlist_track", s1.title, s1.artist, s1.duration, PlaylistTrackData(s1, pl, [s1, s2], 0), parent_playlist_id="PL001", tree_prefix="├─"),
+        DropdownItem("playlist_track", s2.title, s2.artist, s2.duration, PlaylistTrackData(s2, pl, [s1, s2], 1), parent_playlist_id="PL001", tree_prefix="└─"),
+    ]
+    assert len(sample_items) == 3
+    collapsed = collapse_playlist_accordion(sample_items, "PL001")
+    assert len(collapsed) == 1
+    assert collapsed[0].kind == "playlist"
+
+    # Test rendering screen with expanded accordion
+    screen_acc = render_home_screen(
+        query="lofi",
+        cursor_on=True,
+        filter_mode="All",
+        items=sample_items,
+        selected_idx=1,
+        scroll_offset=0,
+        is_searching=False,
+        is_loading_more=False,
+        expanded_playlist_id="PL001",
+        console_width=80,
+        console_height=24,
+    )
+    assert screen_acc is not None
+    print(f"✓ OpenCode-styled home view & accordion tests passed ({len(results)} search results rendered)")
 
 
 if __name__ == "__main__":

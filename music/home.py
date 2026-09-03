@@ -2,14 +2,14 @@
 
 Provides a vertically and horizontally centered, minimalist search bar with live animated
 loading dropdown suggestions for tracks, playlists, and history. Supports asynchronous
-infinite scrolling to browse more results indefinitely.
+infinite scrolling and interactive playlist accordion expansion/collapse via Tab.
 """
 
 import shutil
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from rich import box
 from rich.align import Align
@@ -25,6 +25,7 @@ from music.player import MpvPlayer
 from music.search import (
     PlaylistItem,
     SongItem,
+    get_playlist_tracks,
     is_playlist_url,
     search_music,
     search_playlists,
@@ -34,14 +35,27 @@ from music.ui import KeyReader, run_player_loop
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 PAGE_SIZE = 7
 
+# Cache for playlist tracks to allow instant accordion expansion
+_PLAYLIST_CACHE: Dict[str, List[SongItem]] = {}
+
+
+@dataclass
+class PlaylistTrackData:
+    song: SongItem
+    playlist: PlaylistItem
+    full_playlist_tracks: List[SongItem]
+    track_index: int
+
 
 @dataclass
 class DropdownItem:
-    kind: str  # "track", "playlist", "history", "preset"
+    kind: str  # "track", "playlist", "history", "preset", "playlist_track", "playlist_loading"
     title: str
     subtitle: str
     extra: str
     data: Any
+    parent_playlist_id: Optional[str] = None
+    tree_prefix: str = ""
 
 
 def truncate_str(text: str, max_len: int) -> str:
@@ -49,6 +63,13 @@ def truncate_str(text: str, max_len: int) -> str:
     if len(text) > max_len:
         return text[: max_len - 1].rstrip() + "…"
     return text
+
+
+def collapse_playlist_accordion(items: List[DropdownItem], playlist_id: Optional[str]) -> List[DropdownItem]:
+    """Remove any expanded child tracks belonging to playlist_id."""
+    if not playlist_id:
+        return items
+    return [it for it in items if it.parent_playlist_id != playlist_id]
 
 
 def get_default_items() -> List[DropdownItem]:
@@ -98,10 +119,7 @@ def fetch_dropdown_results(
     limit: int = 15,
     seen_ids: Optional[Set[str]] = None,
 ) -> List[DropdownItem]:
-    """Fetch search results formatted for the dropdown according to filter_mode.
-    
-    If seen_ids is provided, deduplicates against already loaded items for infinite scrolling.
-    """
+    """Fetch search results formatted for the dropdown according to filter_mode."""
     clean_q = query.strip()
     if not clean_q:
         return get_default_items()
@@ -162,6 +180,7 @@ def render_home_screen(
     scroll_offset: int,
     is_searching: bool,
     is_loading_more: bool = False,
+    expanded_playlist_id: Optional[str] = None,
     console_width: int = 80,
     console_height: int = 24,
 ) -> Group:
@@ -243,7 +262,7 @@ def render_home_screen(
         visible_items = items[scroll_offset : scroll_offset + PAGE_SIZE]
 
         col_cursor = 2
-        col_kind = 12
+        col_kind = 13
         col_extra = 11
         rem_width = max(24, inner_width - col_cursor - col_kind - col_extra)
         col_title = int(rem_width * 0.60)
@@ -265,8 +284,22 @@ def render_home_screen(
                     kind_badge = "🎵 Track"
                     kind_style = "bold magenta" if is_active else "dim magenta"
                 elif itm.kind == "playlist":
-                    kind_badge = "📋 Playlist"
-                    kind_style = "bold cyan" if is_active else "dim cyan"
+                    p_id = itm.data.playlist_id if hasattr(itm.data, "playlist_id") else ""
+                    if expanded_playlist_id and expanded_playlist_id == p_id:
+                        kind_badge = "▼ 📂 Playlist"
+                        kind_style = "bold bright_cyan" if is_active else "dim bright_cyan"
+                    else:
+                        kind_badge = "▶ 📋 Playlist"
+                        kind_style = "bold cyan" if is_active else "dim cyan"
+                elif itm.kind == "playlist_track":
+                    prefix = itm.tree_prefix or "├─"
+                    kind_badge = f"  {prefix} 🎵"
+                    kind_style = "bold bright_cyan" if is_active else "dim cyan"
+                elif itm.kind == "playlist_loading":
+                    prefix = itm.tree_prefix or "├─"
+                    spinner = SPINNER_FRAMES[int(time.time() * 10) % len(SPINNER_FRAMES)]
+                    kind_badge = f"  {prefix} {spinner}"
+                    kind_style = "bold bright_cyan"
                 elif itm.kind == "history":
                     kind_badge = "🕒 History"
                     kind_style = "bold yellow" if is_active else "dim yellow"
@@ -294,8 +327,8 @@ def render_home_screen(
                         f"[dim yellow]{trunc_sub}[/dim yellow]",
                         f"[dim cyan]{trunc_extra}[/dim cyan]",
                     )
-            
-            # Fill empty rows if visible_items < PAGE_SIZE to keep box height strictly constant
+
+            # Fill empty rows if visible_items < PAGE_SIZE to keep box height constant
             for _ in range(PAGE_SIZE - len(visible_items)):
                 items_table.add_row(" ", "", "", "", "")
         else:
@@ -331,10 +364,22 @@ def render_home_screen(
             padding=(0, 1),
         )
 
-    # 4. Minimalist Footer Shortcuts & Scroll Range
+    # 4. Context-aware Footer Shortcuts
+    current_kind = items[selected_idx].kind if items and 0 <= selected_idx < len(items) else ""
+    if current_kind == "playlist":
+        p_id = items[selected_idx].data.playlist_id if hasattr(items[selected_idx].data, "playlist_id") else ""
+        if expanded_playlist_id and expanded_playlist_id == p_id:
+            tab_action = "Close [bold cyan]Tab[/bold cyan]"
+        else:
+            tab_action = "Songs [bold cyan]Tab[/bold cyan]"
+    elif current_kind in ("playlist_track", "playlist_loading"):
+        tab_action = "Close [bold cyan]Tab[/bold cyan]"
+    else:
+        tab_action = "Filter [bold cyan]Tab[/bold cyan]"
+
     footer = Align.center(
         Text.from_markup(
-            "[dim white]Scroll [bold cyan]↑/↓[/bold cyan]   [dim]•[/dim]   Play [bold cyan]Enter[/bold cyan]   [dim]•[/dim]   Filter [bold cyan]Tab[/bold cyan]   [dim]•[/dim]   Exit [bold cyan]Esc[/bold cyan][/dim white]"
+            f"[dim white]Scroll [bold cyan]↑/↓[/bold cyan]   [dim]•[/dim]   Play [bold cyan]Enter[/bold cyan]   [dim]•[/dim]   {tab_action}   [dim]•[/dim]   Exit [bold cyan]Esc[/bold cyan][/dim white]"
         )
     )
 
@@ -358,7 +403,7 @@ def render_home_screen(
 
 
 def run_home_view() -> Optional[Tuple[str, Any]]:
-    """Interactive loop for the OpenCode-styled home view with indefinite async scrolling."""
+    """Interactive loop for the OpenCode-styled home view with infinite scroll and accordion."""
     console = Console()
 
     query = ""
@@ -373,6 +418,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
     is_searching = False
     is_loading_more = False
     has_more = True
+    expanded_playlist_id: Optional[str] = None
 
     last_key_time = 0.0
     last_searched_query = ""
@@ -382,7 +428,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
 
     # Background initial search debounced worker
     def initial_search_worker():
-        nonlocal items, is_searching, last_searched_query, last_searched_mode, seen_ids, current_limit, has_more, scroll_offset, selected_idx
+        nonlocal items, is_searching, last_searched_query, last_searched_mode, seen_ids, current_limit, has_more, scroll_offset, selected_idx, expanded_playlist_id
         while running:
             time.sleep(0.04)
             current_q = query.strip()
@@ -401,6 +447,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                         is_searching = False
                         scroll_offset = 0
                         selected_idx = 0
+                        expanded_playlist_id = None
                 continue
 
             # Check if query or filter mode changed and debounce elapsed (220ms)
@@ -417,6 +464,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     is_searching = False
                     scroll_offset = 0
                     selected_idx = 0
+                    expanded_playlist_id = None
 
     # Background async pagination load-more worker
     def load_more_worker(target_q: str, target_mode: str):
@@ -453,6 +501,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     curr_items = list(items)
                     searching = is_searching
                     loading_more = is_loading_more
+                    exp_pl = expanded_playlist_id
 
                 # Adjust viewport scroll window
                 if selected_idx < scroll_offset:
@@ -469,6 +518,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     scroll_offset=scroll_offset,
                     is_searching=searching,
                     is_loading_more=loading_more,
+                    expanded_playlist_id=exp_pl,
                     console_width=term_w,
                     console_height=term_h,
                 )
@@ -479,6 +529,12 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     continue
 
                 if key in ("escape", "quit"):
+                    if expanded_playlist_id is not None:
+                        # Collapse accordion before exiting
+                        with lock:
+                            items = collapse_playlist_accordion(items, expanded_playlist_id)
+                            expanded_playlist_id = None
+                        continue
                     running = False
                     return None
 
@@ -489,14 +545,14 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 elif key == "down":
                     if curr_items:
                         selected_idx = min(len(curr_items) - 1, selected_idx + 1)
-                        # Asynchronous Infinite Scroll Trigger:
-                        # When scrolling down within 3 items of the end, fetch next batch in background!
+                        # Infinite scroll trigger if approaching bottom (and not inside an accordion)
                         if (
                             query.strip()
                             and selected_idx >= len(curr_items) - 4
                             and has_more
                             and not loading_more
                             and not searching
+                            and expanded_playlist_id is None
                         ):
                             threading.Thread(
                                 target=load_more_worker,
@@ -505,6 +561,133 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                             ).start()
 
                 elif key in ("tab", "\t"):
+                    # Check context: are we on a playlist or inside an open accordion?
+                    if curr_items and 0 <= selected_idx < len(curr_items):
+                        curr_item = curr_items[selected_idx]
+
+                        # Case A: User is inside an open playlist accordion (on a song or loading row)
+                        if curr_item.kind in ("playlist_track", "playlist_loading"):
+                            target_pid = curr_item.parent_playlist_id
+                            with lock:
+                                items = collapse_playlist_accordion(items, target_pid)
+                                expanded_playlist_id = None
+                                for p_idx, it in enumerate(items):
+                                    if it.kind == "playlist" and hasattr(it.data, "playlist_id") and it.data.playlist_id == target_pid:
+                                        selected_idx = p_idx
+                                        break
+                            continue
+
+                        # Case B: User is on a playlist item
+                        elif curr_item.kind == "playlist" and hasattr(curr_item.data, "playlist_id"):
+                            target_pid = curr_item.data.playlist_id
+
+                            # If already open, close it!
+                            if expanded_playlist_id == target_pid:
+                                with lock:
+                                    items = collapse_playlist_accordion(items, target_pid)
+                                    expanded_playlist_id = None
+                                continue
+
+                            # Close any other open accordion first
+                            if expanded_playlist_id is not None:
+                                with lock:
+                                    items = collapse_playlist_accordion(items, expanded_playlist_id)
+                                    expanded_playlist_id = None
+                                    for p_idx, it in enumerate(items):
+                                        if it.kind == "playlist" and hasattr(it.data, "playlist_id") and it.data.playlist_id == target_pid:
+                                            selected_idx = p_idx
+                                            curr_item = it
+                                            break
+
+                            # Check cache for tracks
+                            if target_pid in _PLAYLIST_CACHE:
+                                cached_tracks = _PLAYLIST_CACHE[target_pid]
+                                total_t = len(cached_tracks)
+                                child_items = []
+                                for t_idx, t in enumerate(cached_tracks):
+                                    tree_p = "└─" if t_idx == total_t - 1 else "├─"
+                                    child_items.append(
+                                        DropdownItem(
+                                            kind="playlist_track",
+                                            title=t.title,
+                                            subtitle=t.artist,
+                                            extra=t.duration or "--:--",
+                                            data=PlaylistTrackData(
+                                                song=t,
+                                                playlist=curr_item.data,
+                                                full_playlist_tracks=cached_tracks,
+                                                track_index=t_idx,
+                                            ),
+                                            parent_playlist_id=target_pid,
+                                            tree_prefix=tree_p,
+                                        )
+                                    )
+                                with lock:
+                                    items[selected_idx + 1 : selected_idx + 1] = child_items
+                                    expanded_playlist_id = target_pid
+                                    selected_idx += 1
+                                continue
+                            else:
+                                # Show loading placeholder and fetch asynchronously
+                                loading_item = DropdownItem(
+                                    kind="playlist_loading",
+                                    title="Fetching playlist tracks...",
+                                    subtitle=curr_item.data.author,
+                                    extra="⠋",
+                                    data=curr_item.data,
+                                    parent_playlist_id=target_pid,
+                                    tree_prefix="├─",
+                                )
+                                with lock:
+                                    items.insert(selected_idx + 1, loading_item)
+                                    expanded_playlist_id = target_pid
+                                    selected_idx += 1
+
+                                def fetch_playlist_task(p_meta, pid):
+                                    nonlocal items, selected_idx
+                                    _, tracks = get_playlist_tracks(pid, limit=100)
+                                    if tracks:
+                                        _PLAYLIST_CACHE[pid] = tracks
+                                        total_t = len(tracks)
+                                        child_items = []
+                                        for t_idx, t in enumerate(tracks):
+                                            tree_p = "└─" if t_idx == total_t - 1 else "├─"
+                                            child_items.append(
+                                                DropdownItem(
+                                                    kind="playlist_track",
+                                                    title=t.title,
+                                                    subtitle=t.artist,
+                                                    extra=t.duration or "--:--",
+                                                    data=PlaylistTrackData(
+                                                        song=t,
+                                                        playlist=p_meta,
+                                                        full_playlist_tracks=tracks,
+                                                        track_index=t_idx,
+                                                    ),
+                                                    parent_playlist_id=pid,
+                                                    tree_prefix=tree_p,
+                                                )
+                                            )
+                                        with lock:
+                                            new_list = []
+                                            for it in items:
+                                                if it.kind == "playlist_loading" and it.parent_playlist_id == pid:
+                                                    new_list.extend(child_items)
+                                                else:
+                                                    new_list.append(it)
+                                            items = new_list
+                                    else:
+                                        with lock:
+                                            items = [it for it in items if not (it.kind == "playlist_loading" and it.parent_playlist_id == pid)]
+
+                                threading.Thread(
+                                    target=fetch_playlist_task,
+                                    args=(curr_item.data, target_pid),
+                                    daemon=True,
+                                ).start()
+                                continue
+
+                    # Case C: Regular item -> cycle search filter mode
                     filter_idx = (filter_idx + 1) % len(filter_modes)
                     with lock:
                         if query.strip():
@@ -515,16 +698,17 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
 
                 elif key in ("\r", "\n", "enter"):
                     running = False
-                    # If an item in dropdown is active and not searching
                     if not searching and 0 <= selected_idx < len(curr_items):
                         chosen = curr_items[selected_idx]
-                        if chosen.kind in ("track", "history"):
+                        if chosen.kind == "playlist_track":
+                            return ("playlist_track", chosen.data)
+                        elif chosen.kind in ("track", "history"):
                             return ("track", chosen.data)
                         elif chosen.kind == "playlist":
                             return ("playlist", chosen.data)
                         elif chosen.kind == "preset":
                             return ("query", chosen.data)
-                    # If raw query entered
+                    # Raw query
                     if query.strip():
                         if is_playlist_url(query):
                             return ("playlist_url", query.strip())
@@ -542,6 +726,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                             else:
                                 is_searching = False
                                 items = get_default_items()
+                            expanded_playlist_id = None
                         last_key_time = time.time()
                         selected_idx = 0
                         scroll_offset = 0
@@ -551,6 +736,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     with lock:
                         is_searching = False
                         items = get_default_items()
+                        expanded_playlist_id = None
                     last_key_time = time.time()
                     selected_idx = 0
                     scroll_offset = 0
@@ -559,6 +745,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     query += key
                     with lock:
                         is_searching = True
+                        expanded_playlist_id = None
                     last_key_time = time.time()
                     selected_idx = 0
                     scroll_offset = 0

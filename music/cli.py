@@ -267,6 +267,17 @@ def launch_home_session() -> None:
             vol = get_config_val("volume", 80)
             player = MpvPlayer(initial_volume=vol)
             run_player_loop(target, player)
+        elif act_type == "playlist_track":
+            vol = get_config_val("volume", 80)
+            player = MpvPlayer(initial_volume=vol)
+            initial_queue = target.full_playlist_tracks[target.track_index + 1 :]
+            run_player_loop(
+                target.song,
+                player,
+                initial_queue=initial_queue,
+                playlist_name=target.playlist.title,
+                playlist_pos=(target.track_index + 1, len(target.full_playlist_tracks)),
+            )
         elif act_type == "playlist":
             handle_playlist_query(target.url or target.playlist_id)
         elif act_type in ("playlist_url", "search_playlist"):
