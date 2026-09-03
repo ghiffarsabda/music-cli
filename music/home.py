@@ -20,6 +20,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from music.adblock import check_and_skip_ads
 from music.cache import get_cached_search, set_cached_search
 from music.config import get_config_val
 from music.history import get_history, search_history
@@ -30,6 +31,7 @@ from music.search import (
     PlaylistItem,
     SongItem,
     StreamPrewarmer,
+    format_duration,
     get_album_tracks,
     get_playlist_tracks,
     is_album_url,
@@ -38,7 +40,7 @@ from music.search import (
     search_music,
     search_playlists,
 )
-from music.ui import KeyReader, run_player_loop
+from music.ui import KeyReader
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 PAGE_SIZE = 7
@@ -410,19 +412,32 @@ def render_home_screen(
     expanded_playlist_id: Optional[str] = None,
     console_width: int = 80,
     console_height: int = 24,
+    now_playing: Optional[Tuple[SongItem, str, int]] = None,
+    notification_msg: str = "",
+    action_dialog_item: Optional[Tuple[str, str, str]] = None,
 ) -> Group:
     """Build the OpenCode-styled home layout with vertical/horizontal centering and viewport scrolling."""
     active_expanded_id = expanded_container_id or expanded_playlist_id
     panel_width = min(72, max(52, console_width - 6))
     inner_width = panel_width - 6
 
-    # 1. Minimalist OpenCode Brand Header
-    header = Align.center(
-        Text.from_markup(
-            "[bold bright_cyan]♫  m u s i c  -  c l i[/bold bright_cyan]  [dim]v0.1.0[/dim]\n"
-            "[green]● Online[/green]  [dim]•[/dim]  [cyan]YouTube Music[/cyan]  [dim]•[/dim]  [magenta]Karaoke Ready[/magenta]  [dim]•[/dim]  [green]🛡️ AdBlock[/green]"
+    # 1. Minimalist OpenCode Brand Header / Now Playing Banner
+    if now_playing:
+        np_song, np_time, np_q = now_playing
+        header = Align.center(
+            Text.from_markup(
+                f"[bold green]▶  Now Playing:[/bold green] [bold white]{truncate_str(np_song.title, 26)}[/bold white] "
+                f"[dim]by {truncate_str(np_song.artist, 18)}[/dim]   [dim]•[/dim]   [cyan]{np_time}[/cyan]   "
+                f"[dim]•[/dim]   [bold yellow]Queue: {np_q}[/bold yellow]"
+            )
         )
-    )
+    else:
+        header = Align.center(
+            Text.from_markup(
+                "[bold bright_cyan]♫  m u s i c  -  c l i[/bold bright_cyan]  [dim]v0.1.0[/dim]\n"
+                "[green]● Online[/green]  [dim]•[/dim]  [cyan]YouTube Music[/cyan]  [dim]•[/dim]  [magenta]Karaoke Ready[/magenta]  [dim]•[/dim]  [green]🛡️ AdBlock[/green]"
+            )
+        )
 
     # 2. Centered Search Bar
     cursor_char = "│" if cursor_on else " "
@@ -598,6 +613,32 @@ def render_home_screen(
             padding=(0, 1),
         )
 
+    dialog_panel = None
+    if action_dialog_item:
+        act_title, act_sub, act_kind = action_dialog_item
+        action_table = Table.grid(padding=(0, 2))
+        action_table.add_column(width=3, justify="center")
+        action_table.add_column(width=inner_width - 3, no_wrap=True)
+
+        action_table.add_row(
+            "[bold cyan]▶[/bold cyan]",
+            "[bold bright_white][1 / Enter] Play Now[/bold bright_white] [dim](switch to this track immediately)[/dim]",
+        )
+        action_table.add_row(
+            "[bold green]➕[/bold green]",
+            "[bold bright_white][2 / a] Add to Queue[/bold bright_white] [dim](keep current music playing uninterrupted)[/dim]",
+        )
+
+        dialog_panel = Panel(
+            action_table,
+            title=f"[bold bright_cyan]Choose Action: {truncate_str(act_title, 36)}[/bold bright_cyan]",
+            title_align="left",
+            box=box.ROUNDED,
+            border_style="bright_cyan",
+            width=panel_width,
+            padding=(1, 2),
+        )
+
     # 4. Context-aware Footer Shortcuts
     current_kind = items[selected_idx].kind if items and 0 <= selected_idx < len(items) else ""
     if current_kind in ("album", "playlist"):
@@ -611,11 +652,24 @@ def render_home_screen(
     else:
         tab_action = "Filter [bold cyan]Tab[/bold cyan]"
 
-    footer = Align.center(
-        Text.from_markup(
-            f"[dim white]Scroll [bold cyan]↑/↓[/bold cyan]   [dim]•[/dim]   Play [bold cyan]Enter[/bold cyan]   [dim]•[/dim]   {tab_action}   [dim]•[/dim]   Exit [bold cyan]Esc[/bold cyan][/dim white]"
+    if action_dialog_item:
+        footer = Align.center(
+            Text.from_markup(
+                "[bold cyan][1 / Enter][/bold cyan] Play Now   [dim]•[/dim]   [bold green][2 / a][/bold green] Add to Queue   [dim]•[/dim]   [bold white][Esc][/bold white] Cancel"
+            )
         )
-    )
+    elif now_playing:
+        footer = Align.center(
+            Text.from_markup(
+                f"[dim white]Scroll [bold cyan]↑/↓[/bold cyan]   [dim]•[/dim]   Select [bold cyan]Enter[/bold cyan]   [dim]•[/dim]   Add to Queue [bold green]+ / a[/bold green]   [dim]•[/dim]   {tab_action}   [dim]•[/dim]   Back to Player [bold cyan]Esc[/bold cyan][/dim white]"
+            )
+        )
+    else:
+        footer = Align.center(
+            Text.from_markup(
+                f"[dim white]Scroll [bold cyan]↑/↓[/bold cyan]   [dim]•[/dim]   Play [bold cyan]Enter[/bold cyan]   [dim]•[/dim]   {tab_action}   [dim]•[/dim]   Exit [bold cyan]Esc[/bold cyan][/dim white]"
+            )
+        )
 
     # 5. Vertical Centering Calculation
     content_height = 17
@@ -628,7 +682,17 @@ def render_home_screen(
         header,
         Text(""),
         Align.center(search_panel),
-        Align.center(dropdown_panel),
+    ])
+
+    if notification_msg:
+        elements.append(Align.center(Text.from_markup(notification_msg)))
+
+    if dialog_panel:
+        elements.append(Align.center(dialog_panel))
+    else:
+        elements.append(Align.center(dropdown_panel))
+
+    elements.extend([
         Text(""),
         footer,
     ])
@@ -636,8 +700,16 @@ def render_home_screen(
     return Group(*elements)
 
 
-def run_home_view() -> Optional[Tuple[str, Any]]:
-    """Interactive loop for the OpenCode-styled home view with infinite scroll and accordion."""
+def run_home_view(
+    player: Optional[MpvPlayer] = None,
+    now_playing_song: Optional[SongItem] = None,
+    now_playing_time: str = "",
+    now_playing_queue: Optional[List[SongItem]] = None,
+    ad_blocker: bool = True,
+    current_segments: Optional[List[dict]] = None,
+    skipped_ranges: Optional[Set] = None,
+) -> Optional[Tuple[str, Any, Optional[List[SongItem]]]]:
+    """Interactive loop for the OpenCode-styled home view with infinite scroll, accordion, and in-player search."""
     console = Console()
 
     query = ""
@@ -655,6 +727,11 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
     expanded_container_id: Optional[str] = None
     session_cache: Dict[str, List[DropdownItem]] = {}
     prewarmer = StreamPrewarmer()
+
+    notification_msg = ""
+    notif_clear_time = 0.0
+    action_dialog_item: Optional[Tuple[str, str, str, Any]] = None
+    active_now_playing_time = now_playing_time
 
     last_key_time = 0.0
     last_searched_query = ""
@@ -742,6 +819,27 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 elif selected_idx >= scroll_offset + PAGE_SIZE:
                     scroll_offset = selected_idx - PAGE_SIZE + 1
 
+                if notification_msg and time.time() > notif_clear_time:
+                    notification_msg = ""
+
+                # Live playback update & AdBlock skipping while searching
+                if player and player.process_is_alive():
+                    p_status = player.get_status()
+                    pos = p_status.get("time_pos", 0.0)
+                    dur = p_status.get("duration", 0.0) or (now_playing_song.duration_seconds if now_playing_song else 0)
+                    active_now_playing_time = f"{format_duration(pos)} / {format_duration(dur)}"
+                    if ad_blocker and current_segments and p_status.get("state") == "playing":
+                        s_msg = check_and_skip_ads(player, pos, current_segments, skipped_ranges)
+                        if s_msg:
+                            notification_msg = f"[bold yellow]🛡️ {s_msg}[/bold yellow]"
+                            notif_clear_time = time.time() + 2.0
+
+                now_playing_tuple = (
+                    (now_playing_song, active_now_playing_time, len(now_playing_queue) if now_playing_queue is not None else 0)
+                    if now_playing_song
+                    else None
+                )
+
                 screen = render_home_screen(
                     query=query,
                     cursor_on=cursor_on,
@@ -754,6 +852,13 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     expanded_container_id=exp_id,
                     console_width=term_w,
                     console_height=term_h,
+                    now_playing=now_playing_tuple,
+                    notification_msg=notification_msg,
+                    action_dialog_item=(
+                        (action_dialog_item[0], action_dialog_item[1], action_dialog_item[2])
+                        if action_dialog_item
+                        else None
+                    ),
                 )
                 live.update(screen)
 
@@ -770,6 +875,82 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
 
                 # Any keystroke cancels in-flight pre-warmer to save bandwidth/CPU
                 prewarmer.cancel()
+
+                # Action Dialog handling when choosing Play Now vs Add to Queue
+                if action_dialog_item is not None:
+                    if key in ("1", "p", "P", "\r", "\n", "enter"):
+                        chosen = action_dialog_item[3]
+                        action_dialog_item = None
+                        running = False
+                        if chosen.kind in ("track", "history"):
+                            return ("play_now", chosen.data, [])
+                        elif chosen.kind in ("child_track", "playlist_track"):
+                            c_data = chosen.data
+                            rem = c_data.full_tracks[c_data.track_index + 1:]
+                            return ("play_now", c_data.song, rem)
+                        elif chosen.kind == "album":
+                            _, tracks = get_album_tracks(chosen.data.browse_id)
+                            if tracks:
+                                return ("play_now", tracks[0], tracks[1:])
+                        elif chosen.kind == "playlist":
+                            _, tracks = get_playlist_tracks(chosen.data.playlist_id)
+                            if tracks:
+                                return ("play_now", tracks[0], tracks[1:])
+                        elif chosen.kind == "preset":
+                            query = chosen.data
+                            with lock:
+                                is_searching = True
+                            last_key_time = time.time()
+                            continue
+                    elif key in ("2", "a", "A", "q", "Q"):
+                        chosen = action_dialog_item[3]
+                        action_dialog_item = None
+                        target_queue = now_playing_queue if now_playing_queue is not None else []
+                        if chosen.kind in ("track", "history"):
+                            target_queue.append(chosen.data)
+                            notification_msg = f"[bold green]✓ Added to queue:[/bold green] [white]{truncate_str(chosen.data.title, 30)}[/white] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        elif chosen.kind in ("child_track", "playlist_track"):
+                            c_data = chosen.data
+                            target_queue.append(c_data.song)
+                            notification_msg = f"[bold green]✓ Added to queue:[/bold green] [white]{truncate_str(c_data.song.title, 30)}[/white] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        elif chosen.kind == "album":
+                            _, tracks = get_album_tracks(chosen.data.browse_id)
+                            target_queue.extend(tracks)
+                            notification_msg = f"[bold green]✓ Added {len(tracks)} album tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        elif chosen.kind == "playlist":
+                            _, tracks = get_playlist_tracks(chosen.data.playlist_id)
+                            target_queue.extend(tracks)
+                            notification_msg = f"[bold green]✓ Added {len(tracks)} playlist tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        notif_clear_time = time.time() + 2.5
+                        continue
+                    elif key in ("escape", "quit"):
+                        action_dialog_item = None
+                        continue
+                    else:
+                        continue
+
+                # Quick Add to Queue via + key while searching
+                if key in ("+", "ctrl_a") and now_playing_song is not None:
+                    if curr_items and 0 <= selected_idx < len(curr_items):
+                        chosen = curr_items[selected_idx]
+                        target_queue = now_playing_queue if now_playing_queue is not None else []
+                        if chosen.kind in ("track", "history"):
+                            target_queue.append(chosen.data)
+                            notification_msg = f"[bold green]✓ Added to queue:[/bold green] [white]{truncate_str(chosen.data.title, 30)}[/white] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        elif chosen.kind in ("child_track", "playlist_track"):
+                            c_data = chosen.data
+                            target_queue.append(c_data.song)
+                            notification_msg = f"[bold green]✓ Added to queue:[/bold green] [white]{truncate_str(c_data.song.title, 30)}[/white] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        elif chosen.kind == "album":
+                            _, tracks = get_album_tracks(chosen.data.browse_id)
+                            target_queue.extend(tracks)
+                            notification_msg = f"[bold green]✓ Added {len(tracks)} album tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        elif chosen.kind == "playlist":
+                            _, tracks = get_playlist_tracks(chosen.data.playlist_id)
+                            target_queue.extend(tracks)
+                            notification_msg = f"[bold green]✓ Added {len(tracks)} playlist tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                        notif_clear_time = time.time() + 2.5
+                    continue
 
                 if key in ("escape", "quit"):
                     if expanded_container_id is not None:
@@ -1048,6 +1229,28 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     scroll_offset = 0
 
                 elif key in ("\r", "\n", "enter"):
+                    if now_playing_song is not None:
+                        if not searching and curr_items and 0 <= selected_idx < len(curr_items):
+                            chosen = curr_items[selected_idx]
+                            if chosen.kind in ("child_track", "playlist_track", "track", "history", "album", "playlist"):
+                                action_dialog_item = (chosen.title, chosen.subtitle, chosen.kind, chosen)
+                                continue
+                            elif chosen.kind == "preset":
+                                query = chosen.data
+                                with lock:
+                                    is_searching = True
+                                last_key_time = time.time()
+                                continue
+                        elif query.strip():
+                            if curr_items:
+                                chosen = curr_items[0]
+                                action_dialog_item = (chosen.title, chosen.subtitle, chosen.kind, chosen)
+                                continue
+                            else:
+                                running = False
+                                return ("play_now", query.strip(), None)
+                        continue
+
                     running = False
                     if not searching and 0 <= selected_idx < len(curr_items):
                         chosen = curr_items[selected_idx]

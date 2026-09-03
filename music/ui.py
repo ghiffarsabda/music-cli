@@ -326,6 +326,7 @@ def render_player_panel(
     # Keybinds footer
     controls = Text.from_markup(
         r"[bold white][Space][/bold white] Play/Pause   "
+        r"[bold white][/][/bold white] Search   "
         r"[bold white][n][/bold white] Next   "
         r"[bold white][←/→][/bold white] ±5s   "
         r"[bold white][↑/↓][/bold white] Vol   "
@@ -524,6 +525,41 @@ def run_player_loop(
                         else:
                             message = "Queue is empty"
                             msg_clear_time = time.time() + 1.5
+                    elif key in ("/", "s", "S"):
+                        from music.home import run_home_view
+
+                        live.stop()
+                        status = player.get_status()
+                        curr_t = format_duration(status.get("time_pos", 0.0))
+                        dur_t = format_duration(status.get("duration", 0.0) or curr_song.duration_seconds)
+                        time_progress = f"{curr_t} / {dur_t}"
+
+                        search_action = run_home_view(
+                            player=player,
+                            now_playing_song=curr_song,
+                            now_playing_time=time_progress,
+                            now_playing_queue=queue,
+                            ad_blocker=ad_blocker,
+                            current_segments=current_segments,
+                            skipped_ranges=skipped_ranges,
+                        )
+                        live.start()
+
+                        if search_action:
+                            act_type, target, remaining = search_action
+                            if act_type == "play_now":
+                                curr_song = target
+                                if remaining:
+                                    queue = list(remaining)
+                                add_to_history(curr_song)
+                                stream_url = resolve_audio_stream_url(curr_song)
+                                player.play(stream_url)
+                                buffered_vids.clear()
+                                prebuffering_vid = None
+                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
+                                message = f"▶ Playing: {curr_song.title}"
+                                msg_clear_time = time.time() + 2.5
                     elif key in ("a", "A"):
                         autoplay = not autoplay
                         message = f"Autoplay {'ON' if autoplay else 'OFF'}"

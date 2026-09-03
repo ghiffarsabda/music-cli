@@ -95,6 +95,7 @@ While a track is playing in your terminal:
 | Key | Action |
 |---|---|
 | <kbd>Space</kbd> | Toggle Play / Pause |
+| <kbd>/</kbd> or <kbd>s</kbd> | **Search while playing** (Uninterrupted playback, Play Now or Add to Queue) |
 | <kbd>n</kbd> / <kbd>&gt;</kbd> | **Skip to Next track** (Autoplay queue) |
 | <kbd>a</kbd> | **Toggle Autoplay ON / OFF** |
 | <kbd>b</kbd> | **Toggle AdBlock ON / OFF** |
@@ -104,6 +105,19 @@ While a track is playing in your terminal:
 | <kbd>m</kbd> | Toggle Mute |
 | <kbd>r</kbd> | Replay current track from start |
 | <kbd>q</kbd> | Stop playback and quit |
+
+---
+
+## 🔎 Search While Playing (Uninterrupted Playback)
+
+You can search and explore music **without interrupting your currently playing track**:
+1. Press <kbd>/</kbd> or <kbd>s</kbd> while any song is playing.
+2. The search interface opens with a live mini-player banner at the top (`▶ Now Playing: <Song> (01:23 / 03:45) • Queue: 3`), while your audio stream continues playing smoothly in the background.
+3. Browse songs, albums, and playlists with instant SQLite FTS5 matching, 0ms prefix filtering, and accordion expansions.
+4. **Choose your action on any highlighted item**:
+   - **Play Now** (<kbd>Enter</kbd> / <kbd>1</kbd>): Switch immediately to the selected track.
+   - **Add to Queue** (<kbd>a</kbd> / <kbd>2</kbd> / <kbd>+</kbd>): Add the track or entire album/playlist to your playback queue without interrupting the current song.
+5. Press <kbd>Esc</kbd> anytime to return to the full player dashboard and synchronized lyrics teleprompter.
 
 ---
 

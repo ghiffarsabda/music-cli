@@ -270,6 +270,44 @@ def test_cache_and_offline_search():
     print("✓ Local history offline search & disk caching tests passed (0ms instant matches verified)")
 
 
+def test_search_while_playing():
+    """Verify search while playing layout, now-playing banner, and action dialog."""
+    from music.home import render_home_screen, get_default_items
+    from music.search import SongItem
+
+    np_song = SongItem("Starboy", "The Weeknd", "Starboy", "03:50", 230, "vid_star", "https://youtube.com/watch?v=vid_star")
+    items = get_default_items()
+
+    # 1. Test now-playing banner rendering
+    screen_np = render_home_screen(
+        query="cold",
+        cursor_on=True,
+        filter_mode="Tracks",
+        items=items,
+        selected_idx=0,
+        scroll_offset=0,
+        is_searching=False,
+        now_playing=(np_song, "01:15 / 03:50", 2),
+        notification_msg="[bold green]✓ Added to queue: Yellow[/bold green]",
+    )
+    assert screen_np is not None
+
+    # 2. Test action dialog rendering (Play Now vs Add to Queue)
+    screen_dialog = render_home_screen(
+        query="cold",
+        cursor_on=True,
+        filter_mode="Tracks",
+        items=items,
+        selected_idx=0,
+        scroll_offset=0,
+        is_searching=False,
+        now_playing=(np_song, "01:15 / 03:50", 2),
+        action_dialog_item=("Yellow", "Coldplay", "track"),
+    )
+    assert screen_dialog is not None
+    print("✓ Search while playing UI & action dialog tests passed")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -283,4 +321,5 @@ if __name__ == "__main__":
     test_album()
     test_cache_and_offline_search()
     test_home_view()
+    test_search_while_playing()
     print("\n🎉 ALL TESTS PASSED!")
