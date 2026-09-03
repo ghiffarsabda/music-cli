@@ -36,6 +36,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "auto_play_top": True,
     "autoplay": True,  # Autoplay next track when song finishes
     "ad_blocker": True,  # Built-in ad & sponsor segment blocker (uBlock/SponsorBlock)
+    "show_lyrics": True,  # Time-synchronized lyrics (Karaoke display)
     "yt_dlp_path": detect_executable("yt-dlp", ["~/.local/bin/yt-dlp", "/usr/bin/yt-dlp"]),
     "node_path": detect_executable("node", ["~/.local/bin/node", "/usr/bin/node"]),
 }

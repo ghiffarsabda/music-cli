@@ -126,6 +126,33 @@ def test_adblock():
     print("✓ Built-in adblocker and SponsorBlock test passed")
 
 
+def test_lyrics():
+    from music.lyrics import parse_lrc, get_lyrics_display_window, LyricsData, LyricLine
+    sample_lrc = """[00:05.50] Hello world
+[00:10.00] Line two
+[00:15.25] Line three"""
+    parsed = parse_lrc(sample_lrc)
+    assert len(parsed) == 3
+    assert parsed[0].timestamp == 5.5
+    assert parsed[0].text == "Hello world"
+    assert parsed[1].timestamp == 10.0
+    assert parsed[2].timestamp == 15.25
+
+    # Test window at 12.0 seconds (Line two is active)
+    data = LyricsData(is_synced=True, lines=parsed)
+    win, mode = get_lyrics_display_window(data, 12.0)
+    assert mode == "synced"
+    # Current active line should have yellow indicator
+    assert any("▶ Line two" in text for text, _ in win)
+
+    # Test window before song starts (Intro)
+    win, mode = get_lyrics_display_window(data, 2.0)
+    assert mode == "intro"
+    assert any("Instrumental Intro" in text for text, _ in win)
+
+    print("✓ Time-synchronized lyrics engine tests passed")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -134,4 +161,5 @@ if __name__ == "__main__":
     test_player_ipc()
     test_related_tracks()
     test_adblock()
+    test_lyrics()
     print("\n🎉 ALL TESTS PASSED!")

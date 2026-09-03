@@ -22,6 +22,7 @@ from music.adblock import check_and_skip_ads, fetch_skip_segments
 from music.auth import get_auth_status
 from music.config import get_config_val
 from music.history import add_to_history
+from music.lyrics import LyricsData, fetch_lyrics, get_lyrics_display_window
 from music.player import MpvPlayer
 from music.search import (
     SongItem,
@@ -34,108 +35,87 @@ console = Console()
 
 
 def prompt_song_selection(songs: List[SongItem]) -> Optional[SongItem]:
-    """Render search results in a clean table and prompt user to pick."""
-    if not songs:
-        console.print("[red]No songs found.[/red]")
-        return None
-
-    if len(songs) == 1:
-        return songs[0]
-
+    """Render interactive numbered table of search results and prompt user selection."""
     table = Table(
-        title="[bold cyan]YouTube Music Results[/bold cyan]",
+        title="[bold bright_blue]Search Results[/bold bright_blue]",
+        box=box.ROUNDED,
         border_style="bright_blue",
-        title_justify="left",
-        show_lines=False,
+        header_style="bold cyan",
+        show_lines=True,
     )
-    table.add_column("#", style="bold yellow", width=4, justify="right")
-    table.add_column("Title", style="bold white", min_width=25)
-    table.add_column("Artist", style="cyan", min_width=18)
-    table.add_column("Album", style="dim", min_width=15)
-    table.add_column("Duration", style="green", justify="right", width=10)
+    table.add_column("#", style="bold white", width=3, justify="center")
+    table.add_column("Title", style="white", min_width=30)
+    table.add_column("Artist", style="yellow", min_width=20)
+    table.add_column("Album", style="dim", min_width=18)
+    table.add_column("Duration", style="cyan", width=8, justify="right")
 
-    for idx, song in enumerate(songs, 1):
-        table.add_row(
-            str(idx),
-            song.title,
-            song.artist,
-            song.album or "-",
-            song.duration or "--:--",
-        )
+    for i, s in enumerate(songs, start=1):
+        table.add_row(str(i), s.title, s.artist, s.album or "-", s.duration or "--:--")
 
-    console.print()
     console.print(table)
-    console.print()
 
-    auth = get_auth_status()
-    auth_desc = f"[green]● {auth['description']}[/green]" if auth["mode"] != "none" else "[yellow]● Standard Mode (No login)[/yellow]"
-    console.print(f"Status: {auth_desc}")
-    console.print("[dim]Press Enter to play #1, type 1-N to select, or 'q' to cancel:[/dim]")
-
-    try:
-        choice = input("> ").strip().lower()
-    except (KeyboardInterrupt, EOFError):
-        console.print("\n[yellow]Cancelled.[/yellow]")
-        return None
-
-    if choice in ("q", "quit", "exit"):
-        return None
-    if choice == "":
-        return songs[0]
-
-    try:
-        idx = int(choice)
-        if 1 <= idx <= len(songs):
-            return songs[idx - 1]
-    except ValueError:
-        pass
-
-    console.print("[yellow]Invalid selection. Playing top result by default.[/yellow]")
-    return songs[0]
+    while True:
+        try:
+            choice = Prompt.ask(
+                "[bold cyan]Select track #[/bold cyan] (1-" + str(len(songs)) + ", or 'q' to cancel)",
+                default="1",
+            )
+            if choice.lower() in ("q", "quit", "exit"):
+                return None
+            idx = int(choice) - 1
+            if 0 <= idx < len(songs):
+                return songs[idx]
+            console.print(f"[red]Please enter a number between 1 and {len(songs)}.[/red]")
+        except ValueError:
+            console.print("[red]Invalid input. Enter a valid number or 'q'.[/red]")
+        except (KeyboardInterrupt, EOFError):
+            return None
 
 
 class KeyReader:
-    """Non-blocking keyboard character reader using termios and tty."""
+    """Non-blocking keyboard reader with support for arrows, space, and escape keys on Linux."""
 
     def __init__(self):
-        self.fd = sys.stdin.fileno() if sys.stdin.isatty() else None
         self.old_settings = None
 
     def __enter__(self):
-        if self.fd is not None:
+        if sys.stdin.isatty():
             try:
-                self.old_settings = termios.tcgetattr(self.fd)
-                tty.setcbreak(self.fd)
+                self.old_settings = termios.tcgetattr(sys.stdin)
+                tty.setcbreak(sys.stdin.fileno())
             except Exception:
                 self.old_settings = None
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.fd is not None and self.old_settings is not None:
+        if self.old_settings:
             try:
-                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
             except Exception:
                 pass
 
     def get_key(self, timeout: float = 0.05) -> Optional[str]:
-        """Read a single key or escape sequence within timeout seconds."""
-        if self.fd is None:
+        """Read a single keypress or key escape sequence within timeout."""
+        if not sys.stdin.isatty():
             time.sleep(timeout)
             return None
 
-        rlist, _, _ = select.select([self.fd], [], [], timeout)
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
         if not rlist:
             return None
 
         try:
-            ch1 = os.read(self.fd, 1).decode("utf-8", errors="ignore")
+            ch1 = sys.stdin.read(1)
             if ch1 == "\x1b":  # Escape sequence
-                rlist, _, _ = select.select([self.fd], [], [], 0.05)
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.02)
                 if not rlist:
                     return "escape"
-                ch2 = os.read(self.fd, 1).decode("utf-8", errors="ignore")
+                ch2 = sys.stdin.read(1)
                 if ch2 == "[":
-                    ch3 = os.read(self.fd, 1).decode("utf-8", errors="ignore")
+                    rlist, _, _ = select.select([sys.stdin], [], [], 0.02)
+                    if not rlist:
+                        return "escape"
+                    ch3 = sys.stdin.read(1)
                     if ch3 == "A":
                         return "up"
                     elif ch3 == "B":
@@ -144,8 +124,7 @@ class KeyReader:
                         return "right"
                     elif ch3 == "D":
                         return "left"
-                return "escape"
-            elif ch1 in ("\x03", "\x04"):  # Ctrl+C or Ctrl+D
+            elif ch1 == "\x03":  # Ctrl-C
                 return "quit"
             return ch1
         except Exception:
@@ -161,6 +140,8 @@ def render_player_panel(
     next_song: Optional[SongItem] = None,
     is_buffered: bool = False,
     ad_blocker: bool = True,
+    show_lyrics: bool = True,
+    lyrics_window: Optional[List[Tuple[str, str]]] = None,
 ) -> Panel:
     """Build the Rich UI Panel for current playback state."""
     state = status.get("state", "loading")
@@ -194,8 +175,11 @@ def render_player_panel(
     # AdBlock badge
     adblock_badge = "[bold green]🛡️ AdBlock ON[/bold green]" if ad_blocker else "[dim]🛡️ AdBlock OFF[/dim]"
 
+    # Lyrics badge
+    lyrics_badge = "[bold magenta]🎤 Lyrics ON[/bold magenta]" if show_lyrics else "[dim]🎤 Lyrics OFF[/dim]"
+
     # Header line
-    header_text = Text.from_markup(f"  {state_badge}    [dim]•[/dim]    {auth_badge}    [dim]•[/dim]    {autoplay_badge}    [dim]•[/dim]    {adblock_badge}")
+    header_text = Text.from_markup(f"  {state_badge}    [dim]•[/dim]    {auth_badge}    [dim]•[/dim]    {autoplay_badge}    [dim]•[/dim]    {adblock_badge}    [dim]•[/dim]    {lyrics_badge}")
 
     # Song details
     song_info = Table.grid(padding=(0, 2))
@@ -210,6 +194,15 @@ def render_player_panel(
         buff_status = "[bold green](⚡ Pre-buffered)[/bold green]" if is_buffered else "[dim cyan](⌛ Pre-buffering...)[/dim cyan]"
         song_info.add_row("Up Next:", f"[bold cyan]{next_song.title}[/bold cyan] [dim]by {next_song.artist}[/dim]  {buff_status}")
     song_info.add_row("Source:", f"[dim underline]{song.url}[/dim underline]")
+
+    # Synced lyrics section
+    lyrics_elements = []
+    if show_lyrics and lyrics_window:
+        for l_text, l_style in lyrics_window:
+            if l_text:
+                lyrics_elements.append(Align.center(Text(l_text, style=l_style)))
+            else:
+                lyrics_elements.append(Align.center(Text(" ")))
 
     # Progress bar calculation
     completed = min(time_pos, duration) if duration > 0 else 0
@@ -241,6 +234,7 @@ def render_player_panel(
         r"[bold white][m][/bold white] Mute   "
         r"[bold white][a][/bold white] Autoplay   "
         r"[bold white][b][/bold white] AdBlock   "
+        r"[bold white][l][/bold white] Lyrics   "
         r"[bold white][q][/bold white] Quit"
     )
 
@@ -248,6 +242,13 @@ def render_player_panel(
         header_text,
         Text(),
         song_info,
+    ]
+
+    if lyrics_elements:
+        elements.append(Text())
+        elements.append(Group(*lyrics_elements))
+
+    elements.extend([
         Text(),
         Group(
             Align.center(prog_bar),
@@ -257,7 +258,7 @@ def render_player_panel(
         Align.center(vol_text),
         Text(),
         Align.center(controls),
-    ]
+    ])
 
     if message:
         elements.append(Text())
@@ -276,13 +277,16 @@ def run_player_loop(
     player: MpvPlayer,
     autoplay: Optional[bool] = None,
     ad_blocker: Optional[bool] = None,
+    show_lyrics: Optional[bool] = None,
 ) -> None:
-    """Main interactive loop for song playback, asynchronous prebuffering, ad-blocking, and keyboard control."""
+    """Main interactive loop for playback, prebuffering, ad-blocking, synced lyrics, and keyboard control."""
     auth_info = get_auth_status()
     if autoplay is None:
         autoplay = get_config_val("autoplay", True)
     if ad_blocker is None:
         ad_blocker = get_config_val("ad_blocker", True)
+    if show_lyrics is None:
+        show_lyrics = get_config_val("show_lyrics", True)
 
     curr_song = song
     add_to_history(curr_song)
@@ -298,10 +302,22 @@ def run_player_loop(
     current_segments: List[dict] = []
     skipped_ranges = set()
 
+    # Synced lyrics data
+    current_lyrics: Optional[LyricsData] = None
+
     def fetch_segments(vid: str):
         nonlocal current_segments, skipped_ranges
         skipped_ranges = set()
         current_segments = fetch_skip_segments(vid)
+
+    def fetch_lyrics_task(target_song: SongItem):
+        nonlocal current_lyrics
+        current_lyrics = fetch_lyrics(
+            target_song.title,
+            target_song.artist,
+            target_song.duration_seconds,
+            target_song.video_id,
+        )
 
     def fetch_queue(vid: str):
         nonlocal is_fetching
@@ -332,9 +348,10 @@ def run_player_loop(
                 if prebuffering_vid == target_song.video_id:
                     prebuffering_vid = None
 
-    # Start background queue and ad-block segment fetching
+    # Start background queue, ad-block segments, and lyrics fetching
     threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
     threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+    threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
 
     console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{curr_song.title}[/bold white]...")
     stream_url = resolve_audio_stream_url(curr_song)
@@ -384,12 +401,14 @@ def run_player_loop(
                                 curr_song = queue.pop(0)
                                 add_to_history(curr_song)
                                 threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                                 message = f"⚡ Instant Next: {curr_song.title}"
                                 msg_clear_time = time.time() + 2.0
                             else:
                                 curr_song = queue.pop(0)
                                 add_to_history(curr_song)
                                 threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                                 stream_url = resolve_audio_stream_url(curr_song)
                                 player.play(stream_url)
                                 message = f"Skipping to: {curr_song.title}"
@@ -407,6 +426,10 @@ def run_player_loop(
                     elif key in ("b", "B"):
                         ad_blocker = not ad_blocker
                         message = f"🛡️ AdBlock {'ON' if ad_blocker else 'OFF'}"
+                        msg_clear_time = time.time() + 1.5
+                    elif key in ("l", "L"):
+                        show_lyrics = not show_lyrics
+                        message = f"🎤 Lyrics {'ON' if show_lyrics else 'OFF'}"
                         msg_clear_time = time.time() + 1.5
                     elif key == "right":
                         player.seek(5)
@@ -449,6 +472,7 @@ def run_player_loop(
                     curr_song = queue.pop(0)
                     add_to_history(curr_song)
                     threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                    threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                     message = f"⚡ Instant Next: {curr_song.title}"
                     msg_clear_time = time.time() + 2.5
                     if len(queue) < 4 and not is_fetching:
@@ -467,6 +491,11 @@ def run_player_loop(
                 with lock:
                     is_ready = bool(next_track and next_track.video_id in buffered_vids)
 
+                # Calculate lyrics display window
+                lyrics_win = None
+                if show_lyrics:
+                    lyrics_win, _ = get_lyrics_display_window(current_lyrics, status.get("time_pos", 0.0))
+
                 if status["state"] == "error":
                     live.update(
                         render_player_panel(
@@ -478,6 +507,8 @@ def run_player_loop(
                             next_song=next_track,
                             is_buffered=is_ready,
                             ad_blocker=ad_blocker,
+                            show_lyrics=show_lyrics,
+                            lyrics_window=lyrics_win,
                         )
                     )
                     time.sleep(2.0)
@@ -490,12 +521,14 @@ def run_player_loop(
                             curr_song = queue.pop(0)
                             add_to_history(curr_song)
                             threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                            threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                             message = f"⚡ Instant Next: {curr_song.title}"
                             msg_clear_time = time.time() + 2.5
                         else:
                             curr_song = queue.pop(0)
                             add_to_history(curr_song)
                             threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                            threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                             stream_url = resolve_audio_stream_url(curr_song)
                             player.play(stream_url)
                             message = f"Autoplaying: {curr_song.title}"
@@ -515,6 +548,8 @@ def run_player_loop(
                                 next_song=next_track,
                                 is_buffered=is_ready,
                                 ad_blocker=ad_blocker,
+                                show_lyrics=show_lyrics,
+                                lyrics_window=lyrics_win,
                             )
                         )
                         time.sleep(1.0)
@@ -529,6 +564,8 @@ def run_player_loop(
                     next_song=next_track,
                     is_buffered=is_ready,
                     ad_blocker=ad_blocker,
+                    show_lyrics=show_lyrics,
+                    lyrics_window=lyrics_win,
                 )
                 live.update(panel)
 

@@ -62,11 +62,29 @@ While a track is playing in your terminal:
 | <kbd>n</kbd> / <kbd>&gt;</kbd> | **Skip to Next track** (Autoplay queue) |
 | <kbd>a</kbd> | **Toggle Autoplay ON / OFF** |
 | <kbd>b</kbd> | **Toggle AdBlock ON / OFF** |
+| <kbd>l</kbd> | **Toggle Synced Lyrics ON / OFF** |
 | <kbd>→</kbd> / <kbd>←</kbd> | Seek forward / backward 5 seconds |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Increase / decrease volume by 5% |
 | <kbd>m</kbd> | Toggle Mute |
 | <kbd>r</kbd> | Replay current track from start |
 | <kbd>q</kbd> | Stop playback and quit |
+
+---
+
+## 🎤 Time-Synchronized Lyrics (Karaoke Mode)
+
+`music-cli` integrates synchronized LRC lyrics powered by the open-source **LRCLIB** database (with YouTube Music fallback):
+- **Live Karaoke Teleprompter**: The terminal centers and highlights the active sung line in real-time (`[bold bright_yellow]▶ Line text[/bold bright_yellow]`), alongside previous and upcoming lines.
+- **Instrumental Detection**: Automatically indicates `♪ (Instrumental Intro) ♪` and `♪ (Outro) ♪`.
+- **Toggle Anytime**: Press <kbd>l</kbd> during playback to toggle the lyrics display on or off.
+
+```bash
+# Stream with lyrics disabled
+music "Hotel California" --no-lyrics
+
+# Configure default
+music config set show_lyrics true
+```
 
 ---
 

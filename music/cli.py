@@ -31,6 +31,7 @@ def handle_play_query(
     select_menu: bool = False,
     autoplay: Optional[bool] = None,
     ad_blocker: Optional[bool] = None,
+    show_lyrics: Optional[bool] = None,
 ) -> None:
     """Search for query and start playback."""
     if is_youtube_url(query):
@@ -56,7 +57,13 @@ def handle_play_query(
 
     vol = get_config_val("volume", 80)
     player = MpvPlayer(initial_volume=vol)
-    run_player_loop(selected_song, player, autoplay=autoplay, ad_blocker=ad_blocker)
+    run_player_loop(
+        selected_song,
+        player,
+        autoplay=autoplay,
+        ad_blocker=ad_blocker,
+        show_lyrics=show_lyrics,
+    )
 
 
 def handle_login(args: argparse.Namespace) -> None:
@@ -175,10 +182,11 @@ def main() -> None:
     subcommands = {"login", "config", "history", "search", "play", "url", "help"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
-        # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock
+        # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics
         select_menu = False
         autoplay = None
         ad_blocker = None
+        show_lyrics = None
         words = []
         for a in raw_args:
             if a in ("-s", "--select"):
@@ -191,11 +199,21 @@ def main() -> None:
                 ad_blocker = False
             elif a == "--adblock":
                 ad_blocker = True
+            elif a == "--no-lyrics":
+                show_lyrics = False
+            elif a == "--lyrics":
+                show_lyrics = True
             else:
                 words.append(a)
         query = " ".join(words).strip()
         if query:
-            handle_play_query(query, select_menu=select_menu, autoplay=autoplay, ad_blocker=ad_blocker)
+            handle_play_query(
+                query,
+                select_menu=select_menu,
+                autoplay=autoplay,
+                ad_blocker=ad_blocker,
+                show_lyrics=show_lyrics,
+            )
             return
 
     parser = argparse.ArgumentParser(
@@ -204,7 +222,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  music "Never Gonna Give You Up"          # Play top match directly with autoplay & AdBlock
+  music "Never Gonna Give You Up"          # Play top match with synced lyrics & autoplay
   music "Bohemian Rhapsody" -s             # Show search results list to pick from
   music search "Daft Punk"                 # Interactive search menu
   music url "https://music.youtube.com/..." # Stream direct URL
@@ -226,6 +244,8 @@ Examples:
     p_play.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
     p_play.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
     p_play.add_argument("--adblock", action="store_true", help="Force enable ad & sponsor blocking")
+    p_play.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
+    p_play.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
 
     p_search = subparsers.add_parser("search", help="Search YouTube Music and select from list")
     p_search.add_argument("query", nargs="+", help="Song title or query to search")
@@ -233,6 +253,8 @@ Examples:
     p_search.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
     p_search.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
     p_search.add_argument("--adblock", action="store_true", help="Force enable ad & sponsor blocking")
+    p_search.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
+    p_search.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
 
     p_url = subparsers.add_parser("url", help="Stream direct YouTube / YouTube Music URL")
     p_url.add_argument("url", help="Direct YouTube or YouTube Music URL")
@@ -240,6 +262,8 @@ Examples:
     p_url.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
     p_url.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
     p_url.add_argument("--adblock", action="store_true", help="Force enable ad & sponsor blocking")
+    p_url.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
+    p_url.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
 
     # login subcommand
     p_login = subparsers.add_parser("login", help="Configure YouTube authentication (skip ads)")
@@ -267,11 +291,13 @@ Examples:
         select_menu = getattr(args, "select", False) or args.command == "search"
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
-        handle_play_query(query, select_menu=select_menu, autoplay=ap, ad_blocker=adb)
+        lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
+        handle_play_query(query, select_menu=select_menu, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
     elif args.command == "url":
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
-        handle_play_query(args.url, select_menu=False, autoplay=ap, ad_blocker=adb)
+        lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
+        handle_play_query(args.url, select_menu=False, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
     elif args.command == "login":
         handle_login(args)
     elif args.command == "history":
