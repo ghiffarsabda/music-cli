@@ -1,14 +1,15 @@
 """Interactive OpenCode-styled Home View for music-cli.
 
 Provides a vertically and horizontally centered, minimalist search bar with live animated
-loading dropdown suggestions for tracks, playlists, and history.
+loading dropdown suggestions for tracks, playlists, and history. Supports asynchronous
+infinite scrolling to browse more results indefinitely.
 """
 
 import shutil
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import Any, List, Optional, Set, Tuple
 
 from rich import box
 from rich.align import Align
@@ -31,6 +32,7 @@ from music.search import (
 from music.ui import KeyReader, run_player_loop
 
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+PAGE_SIZE = 7
 
 
 @dataclass
@@ -90,46 +92,61 @@ def get_default_items() -> List[DropdownItem]:
     return items
 
 
-def fetch_dropdown_results(query: str, filter_mode: str) -> List[DropdownItem]:
-    """Fetch search results formatted for the dropdown according to filter_mode."""
+def fetch_dropdown_results(
+    query: str,
+    filter_mode: str,
+    limit: int = 15,
+    seen_ids: Optional[Set[str]] = None,
+) -> List[DropdownItem]:
+    """Fetch search results formatted for the dropdown according to filter_mode.
+    
+    If seen_ids is provided, deduplicates against already loaded items for infinite scrolling.
+    """
     clean_q = query.strip()
     if not clean_q:
         return get_default_items()
 
+    if seen_ids is None:
+        seen_ids = set()
+
     items: List[DropdownItem] = []
 
     if filter_mode in ("All", "Tracks"):
-        limit_tracks = 6 if filter_mode == "Tracks" else 4
+        limit_tracks = limit if filter_mode == "Tracks" else max(8, int(limit * 0.65))
         try:
             songs = search_music(clean_q, limit=limit_tracks)
             for s in songs:
-                items.append(
-                    DropdownItem(
-                        kind="track",
-                        title=s.title,
-                        subtitle=s.artist,
-                        extra=s.duration or "--:--",
-                        data=s,
+                if s.video_id and s.video_id not in seen_ids:
+                    seen_ids.add(s.video_id)
+                    items.append(
+                        DropdownItem(
+                            kind="track",
+                            title=s.title,
+                            subtitle=s.artist,
+                            extra=s.duration or "--:--",
+                            data=s,
+                        )
                     )
-                )
         except Exception:
             pass
 
     if filter_mode in ("All", "Playlists"):
-        limit_pl = 6 if filter_mode == "Playlists" else 3
+        limit_pl = limit if filter_mode == "Playlists" else max(4, int(limit * 0.35))
         try:
             playlists = search_playlists(clean_q, limit=limit_pl)
             for p in playlists:
-                cnt_str = f"{p.track_count} tracks" if p.track_count > 0 else "Playlist"
-                items.append(
-                    DropdownItem(
-                        kind="playlist",
-                        title=p.title,
-                        subtitle=p.author,
-                        extra=cnt_str,
-                        data=p,
+                if p.playlist_id and p.playlist_id not in seen_ids:
+                    seen_ids.add(p.playlist_id)
+                    cnt_str = f"{p.track_count} tracks" if p.track_count > 0 else "Playlist"
+                    items.append(
+                        DropdownItem(
+                            kind="playlist",
+                            title=p.title,
+                            subtitle=p.author,
+                            extra=cnt_str,
+                            data=p,
+                        )
                     )
-                )
         except Exception:
             pass
 
@@ -142,11 +159,13 @@ def render_home_screen(
     filter_mode: str,
     items: List[DropdownItem],
     selected_idx: int,
+    scroll_offset: int,
     is_searching: bool,
+    is_loading_more: bool = False,
     console_width: int = 80,
     console_height: int = 24,
 ) -> Group:
-    """Build the OpenCode-styled home layout with vertical and horizontal centering."""
+    """Build the OpenCode-styled home layout with vertical/horizontal centering and viewport scrolling."""
     panel_width = min(72, max(52, console_width - 6))
     inner_width = panel_width - 6
 
@@ -220,7 +239,9 @@ def render_home_screen(
             padding=(1, 2),
         )
     else:
-        # Calculate column proportions to prevent wrapping
+        # Windowed Viewport: show PAGE_SIZE items starting at scroll_offset
+        visible_items = items[scroll_offset : scroll_offset + PAGE_SIZE]
+
         col_cursor = 2
         col_kind = 12
         col_extra = 11
@@ -235,9 +256,10 @@ def render_home_screen(
         items_table.add_column(width=col_sub, no_wrap=True)
         items_table.add_column(width=col_extra, justify="right", no_wrap=True)
 
-        if items:
-            for idx, itm in enumerate(items):
-                is_active = idx == selected_idx
+        if visible_items:
+            for i, itm in enumerate(visible_items):
+                actual_idx = scroll_offset + i
+                is_active = actual_idx == selected_idx
 
                 if itm.kind == "track":
                     kind_badge = "🎵 Track"
@@ -272,6 +294,10 @@ def render_home_screen(
                         f"[dim yellow]{trunc_sub}[/dim yellow]",
                         f"[dim cyan]{trunc_extra}[/dim cyan]",
                     )
+            
+            # Fill empty rows if visible_items < PAGE_SIZE to keep box height strictly constant
+            for _ in range(PAGE_SIZE - len(visible_items)):
+                items_table.add_row(" ", "", "", "", "")
         else:
             items_table.add_row(
                 " ",
@@ -280,10 +306,18 @@ def render_home_screen(
                 "",
                 "",
             )
+            for _ in range(PAGE_SIZE - 1):
+                items_table.add_row(" ", "", "", "", "")
 
-        # Dropdown Panel Title
-        if query:
-            res_title = f"[dim]Results ({len(items)})[/dim]"
+        # Dropdown Title with position and pagination status
+        spinner = SPINNER_FRAMES[int(time.time() * 10) % len(SPINNER_FRAMES)]
+        if is_loading_more:
+            res_title = f"[dim]Results ({selected_idx + 1}/{len(items)})  [bold bright_cyan]{spinner} Loading more...[/bold bright_cyan][/dim]"
+        elif query:
+            scroll_hint = ""
+            if scroll_offset + PAGE_SIZE < len(items):
+                scroll_hint = " [cyan]▼ Scroll for more[/cyan]"
+            res_title = f"[dim]Results ({selected_idx + 1}/{len(items)}){scroll_hint}[/dim]"
         else:
             res_title = "[dim]Quick Picks & Recent History[/dim]"
 
@@ -297,16 +331,15 @@ def render_home_screen(
             padding=(0, 1),
         )
 
-    # 4. Minimalist Footer Shortcuts
+    # 4. Minimalist Footer Shortcuts & Scroll Range
     footer = Align.center(
         Text.from_markup(
-            "[dim white]Navigate [bold cyan]↑/↓[/bold cyan]   [dim]•[/dim]   Play [bold cyan]Enter[/bold cyan]   [dim]•[/dim]   Filter [bold cyan]Tab[/bold cyan]   [dim]•[/dim]   Exit [bold cyan]Esc[/bold cyan][/dim white]"
+            "[dim white]Scroll [bold cyan]↑/↓[/bold cyan]   [dim]•[/dim]   Play [bold cyan]Enter[/bold cyan]   [dim]•[/dim]   Filter [bold cyan]Tab[/bold cyan]   [dim]•[/dim]   Exit [bold cyan]Esc[/bold cyan][/dim white]"
         )
     )
 
     # 5. Vertical Centering Calculation
-    # Height of content: header (2) + gap (1) + search (3) + dropdown (~8) + gap (1) + footer (1) = ~16 lines
-    content_height = 16
+    content_height = 17
     top_pad = max(1, (console_height - content_height) // 2)
 
     elements = []
@@ -325,25 +358,31 @@ def render_home_screen(
 
 
 def run_home_view() -> Optional[Tuple[str, Any]]:
-    """Interactive loop for the OpenCode-styled home view."""
+    """Interactive loop for the OpenCode-styled home view with indefinite async scrolling."""
     console = Console()
 
     query = ""
     filter_modes = ["All", "Tracks", "Playlists"]
     filter_idx = 0
     selected_idx = 0
+    scroll_offset = 0
 
     items: List[DropdownItem] = get_default_items()
+    seen_ids: Set[str] = set()
+    current_limit = 15
     is_searching = False
+    is_loading_more = False
+    has_more = True
+
     last_key_time = 0.0
     last_searched_query = ""
     last_searched_mode = "All"
     lock = threading.Lock()
     running = True
 
-    # Background debounced search thread
-    def search_worker():
-        nonlocal items, is_searching, last_searched_query, last_searched_mode
+    # Background initial search debounced worker
+    def initial_search_worker():
+        nonlocal items, is_searching, last_searched_query, last_searched_mode, seen_ids, current_limit, has_more, scroll_offset, selected_idx
         while running:
             time.sleep(0.04)
             current_q = query.strip()
@@ -354,21 +393,50 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 if last_searched_query != "":
                     with lock:
                         items = get_default_items()
+                        seen_ids.clear()
+                        current_limit = 15
+                        has_more = True
                         last_searched_query = ""
                         last_searched_mode = current_mode
                         is_searching = False
+                        scroll_offset = 0
+                        selected_idx = 0
                 continue
 
             # Check if query or filter mode changed and debounce elapsed (220ms)
             if (current_q != last_searched_query or current_mode != last_searched_mode) and (time.time() - last_key_time > 0.22):
-                new_items = fetch_dropdown_results(current_q, current_mode)
+                new_seen = set()
+                new_items = fetch_dropdown_results(current_q, current_mode, limit=15, seen_ids=new_seen)
                 with lock:
                     items = new_items
+                    seen_ids = new_seen
+                    current_limit = 15
+                    has_more = len(new_items) > 0
                     last_searched_query = current_q
                     last_searched_mode = current_mode
                     is_searching = False
+                    scroll_offset = 0
+                    selected_idx = 0
 
-    search_thread = threading.Thread(target=search_worker, daemon=True)
+    # Background async pagination load-more worker
+    def load_more_worker(target_q: str, target_mode: str):
+        nonlocal items, is_loading_more, has_more, current_limit
+        with lock:
+            if is_loading_more or not has_more:
+                return
+            is_loading_more = True
+
+        next_limit = current_limit + 20
+        new_items = fetch_dropdown_results(target_q, target_mode, limit=next_limit, seen_ids=seen_ids)
+        with lock:
+            if new_items:
+                items.extend(new_items)
+                current_limit = next_limit
+            else:
+                has_more = False
+            is_loading_more = False
+
+    search_thread = threading.Thread(target=initial_search_worker, daemon=True)
     search_thread.start()
 
     console.clear()
@@ -384,6 +452,13 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 with lock:
                     curr_items = list(items)
                     searching = is_searching
+                    loading_more = is_loading_more
+
+                # Adjust viewport scroll window
+                if selected_idx < scroll_offset:
+                    scroll_offset = selected_idx
+                elif selected_idx >= scroll_offset + PAGE_SIZE:
+                    scroll_offset = selected_idx - PAGE_SIZE + 1
 
                 screen = render_home_screen(
                     query=query,
@@ -391,7 +466,9 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     filter_mode=filter_modes[filter_idx],
                     items=curr_items,
                     selected_idx=selected_idx,
+                    scroll_offset=scroll_offset,
                     is_searching=searching,
+                    is_loading_more=loading_more,
                     console_width=term_w,
                     console_height=term_h,
                 )
@@ -412,6 +489,20 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 elif key == "down":
                     if curr_items:
                         selected_idx = min(len(curr_items) - 1, selected_idx + 1)
+                        # Asynchronous Infinite Scroll Trigger:
+                        # When scrolling down within 3 items of the end, fetch next batch in background!
+                        if (
+                            query.strip()
+                            and selected_idx >= len(curr_items) - 4
+                            and has_more
+                            and not loading_more
+                            and not searching
+                        ):
+                            threading.Thread(
+                                target=load_more_worker,
+                                args=(query.strip(), filter_modes[filter_idx]),
+                                daemon=True,
+                            ).start()
 
                 elif key in ("tab", "\t"):
                     filter_idx = (filter_idx + 1) % len(filter_modes)
@@ -420,6 +511,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                             is_searching = True
                     last_key_time = time.time()
                     selected_idx = 0
+                    scroll_offset = 0
 
                 elif key in ("\r", "\n", "enter"):
                     running = False
@@ -452,6 +544,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                                 items = get_default_items()
                         last_key_time = time.time()
                         selected_idx = 0
+                        scroll_offset = 0
 
                 elif key in ("ctrl_u", "\x15"):
                     query = ""
@@ -460,6 +553,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                         items = get_default_items()
                     last_key_time = time.time()
                     selected_idx = 0
+                    scroll_offset = 0
 
                 elif len(key) == 1 and key.isprintable():
                     query += key
@@ -467,3 +561,4 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                         is_searching = True
                     last_key_time = time.time()
                     selected_idx = 0
+                    scroll_offset = 0

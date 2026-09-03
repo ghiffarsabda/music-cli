@@ -181,8 +181,11 @@ def test_home_view():
         filter_mode="All",
         items=items,
         selected_idx=0,
+        scroll_offset=0,
         is_searching=False,
+        is_loading_more=False,
         console_width=80,
+        console_height=24,
     )
     assert screen is not None
 

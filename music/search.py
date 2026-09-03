@@ -172,10 +172,10 @@ def search_music(query: str, limit: int = 5) -> List[SongItem]:
 
         yt = YTMusic()
         # Search songs
-        results = yt.search(query, filter="songs")
+        results = yt.search(query, filter="songs", limit=limit)
         if not results:
             # Fallback to general search
-            results = yt.search(query)
+            results = yt.search(query, limit=limit)
 
         items: List[SongItem] = []
         for r in results:
@@ -239,7 +239,7 @@ def search_playlists(query: str, limit: int = 5) -> List[PlaylistItem]:
         from ytmusicapi import YTMusic
 
         yt = YTMusic()
-        results = yt.search(query, filter="playlists")
+        results = yt.search(query, filter="playlists", limit=limit)
         items: List[PlaylistItem] = []
 
         for p in results:
