@@ -106,6 +106,7 @@ While a track is playing in your terminal:
 |---|---|
 | <kbd>Space</kbd> | Toggle Play / Pause |
 | <kbd>/</kbd> or <kbd>s</kbd> | **Search while playing** (Uninterrupted playback, Play Now or Add to Queue) |
+| <kbd>Tab</kbd> or <kbd>u</kbd> | **Open Queue Manager** (View upcoming tracks, reorder, remove) |
 | <kbd>n</kbd> / <kbd>&gt;</kbd> | **Skip to Next track** (Autoplay queue) |
 | <kbd>a</kbd> | **Toggle Autoplay ON / OFF** |
 | <kbd>b</kbd> | **Toggle AdBlock ON / OFF** |
@@ -115,6 +116,22 @@ While a track is playing in your terminal:
 | <kbd>m</kbd> | Toggle Mute |
 | <kbd>r</kbd> | Replay current track from start |
 | <kbd>q</kbd> | Stop playback and quit |
+
+---
+
+## 🎶 Queue Manager (Reorder, Remove, & Jump)
+
+Press <kbd>Tab</kbd> or <kbd>u</kbd> anytime during playback to open the interactive Queue Manager without interrupting audio:
+
+| Key | Action |
+|---|---|
+| <kbd>↑</kbd> / <kbd>↓</kbd> | Select track in the queue |
+| <kbd>Shift+↑</kbd> / <kbd>K</kbd> | **Move track UP** in queue order |
+| <kbd>Shift+↓</kbd> / <kbd>J</kbd> | **Move track DOWN** in queue order |
+| <kbd>x</kbd> / <kbd>Del</kbd> / <kbd>d</kbd> | **Remove track** from queue |
+| <kbd>c</kbd> | **Clear** entire upcoming queue |
+| <kbd>Enter</kbd> | **Play Now** (immediately jump to selected track) |
+| <kbd>Esc</kbd> / <kbd>Tab</kbd> | Return to full player dashboard |
 
 ---
 

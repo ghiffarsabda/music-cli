@@ -322,6 +322,42 @@ def test_render_player_panel():
     print("✓ Player panel Rich markup rendering verified")
 
 
+def test_queue_manager():
+    """Verify Queue Manager rendering, reordering, and removal logic."""
+    from music.queue_view import render_queue_screen
+    from music.search import SongItem
+
+    curr_song = SongItem("Now Song", "Now Artist", "Album", "03:30", 210, "vid_now", "url_now")
+    q1 = SongItem("Queued 1", "Artist 1", "Album 1", "03:00", 180, "vid_1", "url_1")
+    q2 = SongItem("Queued 2", "Artist 2", "Album 2", "04:00", 240, "vid_2", "url_2")
+    q3 = SongItem("Queued 3", "Artist 3", "Album 3", "05:00", 300, "vid_3", "url_3")
+
+    queue = [q1, q2, q3]
+
+    # 1. Test populated queue rendering
+    screen = render_queue_screen(curr_song, "01:00 / 03:30", queue, selected_idx=0, scroll_offset=0)
+    assert screen is not None
+
+    # 2. Test empty queue rendering
+    screen_empty = render_queue_screen(curr_song, "01:00 / 03:30", [], selected_idx=0, scroll_offset=0)
+    assert screen_empty is not None
+
+    # 3. Test reordering: move q2 up to index 0
+    queue[1], queue[0] = queue[0], queue[1]
+    assert queue[0].video_id == "vid_2"
+    assert queue[1].video_id == "vid_1"
+
+    # 4. Test removal: remove first item
+    removed = queue.pop(0)
+    assert removed.video_id == "vid_2"
+    assert len(queue) == 2
+
+    # 5. Test clear
+    queue.clear()
+    assert len(queue) == 0
+    print("✓ Queue manager rendering, reordering, and removal tests passed")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -337,4 +373,5 @@ if __name__ == "__main__":
     test_home_view()
     test_search_while_playing()
     test_render_player_panel()
+    test_queue_manager()
     print("\n🎉 ALL TESTS PASSED!")

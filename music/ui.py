@@ -190,8 +190,12 @@ class KeyReader:
             if not raw:
                 return None
 
-            # Escape sequences (Arrows, Home, End, Delete)
-            if raw in (b"\x1b[A", b"\x1bOA"):
+            # Escape sequences (Arrows, Home, End, Delete, Shift+Arrows)
+            if raw in (b"\x1b[1;2A", b"\x1b[1;3A", b"\x1b[1;5A", b"\x1b\x1b[A"):
+                return "shift_up"
+            elif raw in (b"\x1b[1;2B", b"\x1b[1;3B", b"\x1b[1;5B", b"\x1b\x1b[B"):
+                return "shift_down"
+            elif raw in (b"\x1b[A", b"\x1bOA"):
                 return "up"
             elif raw in (b"\x1b[B", b"\x1bOB"):
                 return "down"
@@ -327,6 +331,7 @@ def render_player_panel(
     controls = Text.from_markup(
         r"[bold white][Space][/bold white] Play/Pause   "
         r"[bold white]\[/][/bold white] Search   "
+        r"[bold white][Tab][/bold white] Queue   "
         r"[bold white][n][/bold white] Next   "
         r"[bold white][←/→][/bold white] ±5s   "
         r"[bold white][↑/↓][/bold white] Vol   "
@@ -551,6 +556,39 @@ def run_player_loop(
                                 curr_song = target
                                 if remaining:
                                     queue = list(remaining)
+                                add_to_history(curr_song)
+                                stream_url = resolve_audio_stream_url(curr_song)
+                                player.play(stream_url)
+                                buffered_vids.clear()
+                                prebuffering_vid = None
+                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
+                                message = f"▶ Playing: {curr_song.title}"
+                                msg_clear_time = time.time() + 2.5
+                    elif key in ("tab", "\t", "u", "U"):
+                        from music.queue_view import run_queue_view
+
+                        live.stop()
+                        status = player.get_status()
+                        curr_t = format_duration(status.get("time_pos", 0.0))
+                        dur_t = format_duration(status.get("duration", 0.0) or curr_song.duration_seconds)
+                        time_progress = f"{curr_t} / {dur_t}"
+
+                        queue_action = run_queue_view(
+                            player=player,
+                            curr_song=curr_song,
+                            queue=queue,
+                            time_progress=time_progress,
+                            ad_blocker=ad_blocker,
+                            current_segments=current_segments,
+                            skipped_ranges=skipped_ranges,
+                        )
+                        live.start()
+
+                        if queue_action:
+                            act_type, target = queue_action
+                            if act_type == "play_now":
+                                curr_song = target
                                 add_to_history(curr_song)
                                 stream_url = resolve_audio_stream_url(curr_song)
                                 player.play(stream_url)
