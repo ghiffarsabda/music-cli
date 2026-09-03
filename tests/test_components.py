@@ -343,9 +343,22 @@ def test_queue_manager():
     assert screen_empty is not None
 
     # 3. Test docked render_queue_panel (flush under playback box)
-    from music.ui import render_queue_panel
+    from music.ui import render_queue_panel, render_player_panel
+    from rich.console import Group
+
+    # Test playback panel with lyrics ON combined with queue panel
+    player_box = render_player_panel(
+        curr_song,
+        {"state": "playing", "time_pos": 30.0, "duration": 210.0, "volume": 80, "mute": False},
+        {"mode": "guest", "description": "Guest", "ad_free": False},
+        show_lyrics=True,
+        lyrics_window=[("Previous line", "dim white"), ("Active lyric line", "bold bright_yellow"), ("Next line", "dim white")],
+    )
     q_panel = render_queue_panel(queue, selected_idx=0, scroll_offset=0)
     assert q_panel is not None
+    combined = Group(player_box, q_panel)
+    assert combined is not None
+
     q_empty_panel = render_queue_panel([], selected_idx=0, scroll_offset=0)
     assert q_empty_panel is not None
 

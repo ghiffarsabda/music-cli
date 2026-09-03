@@ -867,8 +867,8 @@ def run_player_loop(
                     next_song=next_track,
                     is_buffered=is_ready,
                     ad_blocker=ad_blocker,
-                    show_lyrics=show_lyrics if not show_queue else False,
-                    lyrics_window=lyrics_win if not show_queue else None,
+                    show_lyrics=show_lyrics,
+                    lyrics_window=lyrics_win,
                     playlist_name=playlist_name,
                     playlist_pos=cur_pos_str,
                 )
