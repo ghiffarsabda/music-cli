@@ -19,6 +19,7 @@ from music.auth import (
 )
 from music.config import get_config_val, load_config, set_config_val
 from music.history import clear_history, get_history
+from music.home import run_home_view
 from music.player import MpvPlayer
 from music.search import (
     is_playlist_url,
@@ -255,14 +256,38 @@ def handle_config(args: argparse.Namespace) -> None:
     console.print(table)
 
 
+def launch_home_session() -> None:
+    """Run interactive OpenCode-styled home search session loop."""
+    while True:
+        action = run_home_view()
+        if not action:
+            break
+        act_type, target = action
+        if act_type == "track":
+            vol = get_config_val("volume", 80)
+            player = MpvPlayer(initial_volume=vol)
+            run_player_loop(target, player)
+        elif act_type == "playlist":
+            handle_playlist_query(target.url or target.playlist_id)
+        elif act_type in ("playlist_url", "search_playlist"):
+            handle_playlist_query(target)
+        elif act_type == "query":
+            handle_play_query(target)
+
+
 def main() -> None:
     """Main CLI entrypoint."""
     raw_args = sys.argv[1:]
 
+    # OpenCode-styled interactive home view when typing 'music' with no arguments:
+    if not raw_args:
+        launch_home_session()
+        return
+
     # Direct query convenience:
     # If the first argument is not a flag or recognized subcommand,
     # treat all non-flag arguments as a search query!
-    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "help"}
+    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "home", "help"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
         # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics, --shuffle
@@ -394,9 +419,14 @@ Examples:
     p_cfg.add_argument("key", nargs="?", help="Setting name")
     p_cfg.add_argument("val", nargs="?", help="Setting value")
 
+    # home subcommand
+    subparsers.add_parser("home", help="Open interactive OpenCode-styled home search view")
+
     args = parser.parse_args(raw_args)
 
-    if args.command == "playlist":
+    if args.command == "home":
+        launch_home_session()
+    elif args.command == "playlist":
         query = " ".join(args.query).strip()
         select_track = getattr(args, "select", False)
         shuf = getattr(args, "shuffle", False)

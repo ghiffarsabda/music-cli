@@ -167,6 +167,31 @@ def test_playlist():
     print(f"✓ Playlist loading tests passed: '{p_item.title}' ({len(tracks)} tracks loaded)")
 
 
+def test_home_view():
+    from music.home import get_default_items, render_home_screen, fetch_dropdown_results
+    items = get_default_items()
+    assert len(items) >= 4
+    for itm in items:
+        assert itm.kind in ("history", "preset")
+        assert itm.title
+
+    screen = render_home_screen(
+        query="lofi",
+        cursor_on=True,
+        filter_mode="All",
+        items=items,
+        selected_idx=0,
+        is_searching=False,
+        console_width=80,
+    )
+    assert screen is not None
+
+    results = fetch_dropdown_results("lofi", "Tracks")
+    assert len(results) > 0
+    assert any(r.kind == "track" for r in results)
+    print(f"✓ OpenCode-styled home view tests passed ({len(results)} search results rendered)")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -177,4 +202,5 @@ if __name__ == "__main__":
     test_adblock()
     test_lyrics()
     test_playlist()
+    test_home_view()
     print("\n🎉 ALL TESTS PASSED!")

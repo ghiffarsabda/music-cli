@@ -24,7 +24,21 @@ No account or login is required to play songs. If you have a **YouTube Music / Y
 
 ## 🚀 Quick Start
 
-### 1. Basic Playback (Top Result)
+### 0. Interactive Home Screen (OpenCode Style)
+
+Just run `music` alone to launch the centered interactive search bar:
+
+```bash
+music
+```
+
+- 🔍 **Centered Search Bar**: Start typing any song, artist, or playlist title.
+- 📋 **Live Dropdown Suggestions**: Real-time debounced auto-complete and search results for tracks and playlists.
+- 🕒 **Recent History & Quick Picks**: Instant access to your recent playback history and curated popular genres when the search bar is empty.
+- 🔀 **Filter Toggling**: Press <kbd>Tab</kbd> to cycle search filter (`All` ➔ `Tracks` ➔ `Playlists`).
+- ⌨️ **Intuitive Keyboard Navigation**: <kbd>↑</kbd> / <kbd>↓</kbd> to navigate dropdown, <kbd>Enter</kbd> to play instantly, <kbd>Esc</kbd> to exit.
+
+### 1. Direct Playback (Top Result)
 
 ```bash
 music "Never Gonna Give You Up"
