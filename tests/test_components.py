@@ -342,17 +342,24 @@ def test_queue_manager():
     screen_empty = render_queue_screen(curr_song, "01:00 / 03:30", [], selected_idx=0, scroll_offset=0)
     assert screen_empty is not None
 
-    # 3. Test reordering: move q2 up to index 0
+    # 3. Test docked render_queue_panel (flush under playback box)
+    from music.ui import render_queue_panel
+    q_panel = render_queue_panel(queue, selected_idx=0, scroll_offset=0)
+    assert q_panel is not None
+    q_empty_panel = render_queue_panel([], selected_idx=0, scroll_offset=0)
+    assert q_empty_panel is not None
+
+    # 4. Test reordering: move q2 up to index 0
     queue[1], queue[0] = queue[0], queue[1]
     assert queue[0].video_id == "vid_2"
     assert queue[1].video_id == "vid_1"
 
-    # 4. Test removal: remove first item
+    # 5. Test removal: remove first item
     removed = queue.pop(0)
     assert removed.video_id == "vid_2"
     assert len(queue) == 2
 
-    # 5. Test clear
+    # 6. Test clear
     queue.clear()
     assert len(queue) == 0
     print("✓ Queue manager rendering, reordering, and removal tests passed")

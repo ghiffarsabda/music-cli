@@ -376,6 +376,81 @@ def render_player_panel(
     )
 
 
+def _truncate_text(text: str, max_len: int) -> str:
+    """Cleanly truncate text with ellipsis if exceeding max_len."""
+    if len(text) > max_len:
+        return text[: max_len - 1].rstrip() + "…"
+    return text
+
+
+def render_queue_panel(
+    queue: List[SongItem],
+    selected_idx: int,
+    scroll_offset: int,
+    page_size: int = 5,
+    notification_msg: str = "",
+) -> Panel:
+    """Render compact Queue Manager panel directly flush under the playback box."""
+    if not queue:
+        content = Text(
+            "\n  The queue is currently empty. Press '/' to search and queue tracks with '+' or 'Enter'!\n",
+            style="dim italic",
+        )
+    else:
+        table = Table(
+            box=None,
+            expand=True,
+            show_header=True,
+            header_style="bold cyan",
+            padding=(0, 1),
+        )
+        table.add_column("", width=2, justify="center")
+        table.add_column("#", width=3, justify="right", style="dim")
+        table.add_column("Title", min_width=24, no_wrap=True)
+        table.add_column("Artist", min_width=16, style="yellow", no_wrap=True)
+        table.add_column("Duration", width=8, justify="right", style="cyan")
+
+        visible_items = queue[scroll_offset : scroll_offset + page_size]
+        for v_idx, song in enumerate(visible_items):
+            actual_idx = scroll_offset + v_idx
+            is_selected = actual_idx == selected_idx
+            prefix = "▶ " if is_selected else "  "
+            pos_str = str(actual_idx + 1)
+            row_style = "bold bright_white on blue" if is_selected else "white"
+
+            title_str = _truncate_text(song.title, 34)
+            artist_str = _truncate_text(song.artist, 18)
+            dur_str = song.duration or "--:--"
+
+            table.add_row(prefix, pos_str, title_str, artist_str, dur_str, style=row_style)
+
+        elements = [table]
+        if notification_msg:
+            elements.append(Align.center(Text.from_markup(notification_msg)))
+
+        controls = Text.from_markup(
+            "[bold cyan]↑/↓[/bold cyan] Select   [dim]•[/dim]   "
+            "[bold cyan]Shift+↑/↓ (J/K)[/bold cyan] Reorder   [dim]•[/dim]   "
+            "[bold red]x / Del[/bold red] Remove   [dim]•[/dim]   "
+            "[bold cyan]Enter[/bold cyan] Play Now   [dim]•[/dim]   "
+            "[bold white]Tab / Esc[/bold white] Close"
+        )
+        elements.append(Text(""))
+        elements.append(Align.center(controls))
+        content = Group(*elements)
+
+    start_n = scroll_offset + 1 if queue else 0
+    end_n = min(len(queue), scroll_offset + page_size)
+    count_str = f"({start_n}-{end_n} of {len(queue)})" if queue else "(empty)"
+
+    return Panel(
+        content,
+        title=f"[bold bright_cyan]🎶 Up Next Queue {count_str}[/bold bright_cyan]",
+        border_style="bright_cyan",
+        padding=(0, 2),
+    )
+
+
 def run_player_loop(
     song: SongItem,
     player: MpvPlayer,
@@ -477,12 +552,21 @@ def run_player_loop(
     message = ""
     msg_clear_time = 0.0
 
+    show_queue = False
+    queue_selected_idx = 0
+    queue_scroll_offset = 0
+    QUEUE_PAGE_SIZE = 5
+    queue_notif_msg = ""
+    queue_notif_clear = 0.0
+
     with KeyReader() as key_reader:
         with Live(console=console, refresh_per_second=10, transient=False) as live:
             while player.process_is_alive():
-                # Clear temporary notification message
+                # Clear temporary notification messages
                 if message and time.time() > msg_clear_time:
                     message = ""
+                if queue_notif_msg and time.time() > queue_notif_clear:
+                    queue_notif_msg = ""
 
                 # Asynchronous prebuffering: prebuffer upcoming track in background
                 if (autoplay or bool(queue)) and queue:
@@ -566,38 +650,62 @@ def run_player_loop(
                                 message = f"▶ Playing: {curr_song.title}"
                                 msg_clear_time = time.time() + 2.5
                     elif key in ("tab", "\t", "u", "U"):
-                        from music.queue_view import run_queue_view
-
-                        live.stop()
-                        status = player.get_status()
-                        curr_t = format_duration(status.get("time_pos", 0.0))
-                        dur_t = format_duration(status.get("duration", 0.0) or curr_song.duration_seconds)
-                        time_progress = f"{curr_t} / {dur_t}"
-
-                        queue_action = run_queue_view(
-                            player=player,
-                            curr_song=curr_song,
-                            queue=queue,
-                            time_progress=time_progress,
-                            ad_blocker=ad_blocker,
-                            current_segments=current_segments,
-                            skipped_ranges=skipped_ranges,
-                        )
-                        live.start()
-
-                        if queue_action:
-                            act_type, target = queue_action
-                            if act_type == "play_now":
-                                curr_song = target
-                                add_to_history(curr_song)
-                                stream_url = resolve_audio_stream_url(curr_song)
-                                player.play(stream_url)
-                                buffered_vids.clear()
-                                prebuffering_vid = None
-                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
-                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
-                                message = f"▶ Playing: {curr_song.title}"
-                                msg_clear_time = time.time() + 2.5
+                        show_queue = not show_queue
+                        queue_selected_idx = 0
+                        queue_scroll_offset = 0
+                        queue_notif_msg = ""
+                        message = "Queue opened" if show_queue else "Queue closed"
+                        msg_clear_time = time.time() + 1.2
+                    elif show_queue and key == "escape":
+                        show_queue = False
+                        message = "Queue closed"
+                        msg_clear_time = time.time() + 1.2
+                    elif show_queue and key == "up":
+                        if queue:
+                            queue_selected_idx = max(0, queue_selected_idx - 1)
+                    elif show_queue and key == "down":
+                        if queue:
+                            queue_selected_idx = min(len(queue) - 1, queue_selected_idx + 1)
+                    elif show_queue and key in ("shift_up", "K", "k"):
+                        if queue and queue_selected_idx > 0:
+                            queue[queue_selected_idx], queue[queue_selected_idx - 1] = queue[queue_selected_idx - 1], queue[queue_selected_idx]
+                            queue_selected_idx -= 1
+                            queue_notif_msg = f"[bold green]▲ Moved up: {_truncate_text(queue[queue_selected_idx].title, 26)}[/bold green]"
+                            queue_notif_clear = time.time() + 1.5
+                    elif show_queue and key in ("shift_down", "J", "j"):
+                        if queue and queue_selected_idx < len(queue) - 1:
+                            queue[queue_selected_idx], queue[queue_selected_idx + 1] = queue[queue_selected_idx + 1], queue[queue_selected_idx]
+                            queue_selected_idx += 1
+                            queue_notif_msg = f"[bold green]▼ Moved down: {_truncate_text(queue[queue_selected_idx].title, 26)}[/bold green]"
+                            queue_notif_clear = time.time() + 1.5
+                    elif show_queue and key in ("x", "X", "delete", "backspace", "d", "D"):
+                        if queue and 0 <= queue_selected_idx < len(queue):
+                            removed = queue.pop(queue_selected_idx)
+                            if queue_selected_idx >= len(queue):
+                                queue_selected_idx = max(0, len(queue) - 1)
+                            queue_notif_msg = f"[bold yellow]✗ Removed: {_truncate_text(removed.title, 26)}[/bold yellow]"
+                            queue_notif_clear = time.time() + 1.5
+                    elif show_queue and key in ("c", "C"):
+                        if queue:
+                            queue.clear()
+                            queue_selected_idx = 0
+                            queue_scroll_offset = 0
+                            queue_notif_msg = "[bold red]✓ Queue cleared[/bold red]"
+                            queue_notif_clear = time.time() + 1.5
+                    elif show_queue and key in ("enter", "\r", "\n"):
+                        if queue and 0 <= queue_selected_idx < len(queue):
+                            curr_song = queue.pop(queue_selected_idx)
+                            add_to_history(curr_song)
+                            stream_url = resolve_audio_stream_url(curr_song)
+                            player.play(stream_url)
+                            buffered_vids.clear()
+                            prebuffering_vid = None
+                            threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+                            threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
+                            message = f"▶ Playing: {curr_song.title}"
+                            msg_clear_time = time.time() + 2.5
+                            queue_selected_idx = 0
+                            queue_scroll_offset = 0
                     elif key in ("a", "A"):
                         autoplay = not autoplay
                         message = f"Autoplay {'ON' if autoplay else 'OFF'}"
@@ -631,6 +739,14 @@ def run_player_loop(
                         message = f"Volume: {new_vol}%"
                         msg_clear_time = time.time() + 1.2
                     elif key == "down":
+                        new_vol = player.adjust_volume(-5)
+                        message = f"Volume: {new_vol}%"
+                        msg_clear_time = time.time() + 1.2
+                    elif key in ("+", "="):
+                        new_vol = player.adjust_volume(5)
+                        message = f"Volume: {new_vol}%"
+                        msg_clear_time = time.time() + 1.2
+                    elif key in ("-", "_"):
                         new_vol = player.adjust_volume(-5)
                         message = f"Volume: {new_vol}%"
                         msg_clear_time = time.time() + 1.2
@@ -751,12 +867,33 @@ def run_player_loop(
                     next_song=next_track,
                     is_buffered=is_ready,
                     ad_blocker=ad_blocker,
-                    show_lyrics=show_lyrics,
-                    lyrics_window=lyrics_win,
+                    show_lyrics=show_lyrics if not show_queue else False,
+                    lyrics_window=lyrics_win if not show_queue else None,
                     playlist_name=playlist_name,
                     playlist_pos=cur_pos_str,
                 )
-                live.update(panel)
+
+                if show_queue:
+                    if queue:
+                        queue_selected_idx = max(0, min(len(queue) - 1, queue_selected_idx))
+                        if queue_selected_idx < queue_scroll_offset:
+                            queue_scroll_offset = queue_selected_idx
+                        elif queue_selected_idx >= queue_scroll_offset + QUEUE_PAGE_SIZE:
+                            queue_scroll_offset = queue_selected_idx - QUEUE_PAGE_SIZE + 1
+                    else:
+                        queue_selected_idx = 0
+                        queue_scroll_offset = 0
+
+                    queue_box = render_queue_panel(
+                        queue=queue,
+                        selected_idx=queue_selected_idx,
+                        scroll_offset=queue_scroll_offset,
+                        page_size=QUEUE_PAGE_SIZE,
+                        notification_msg=queue_notif_msg,
+                    )
+                    live.update(Group(panel, queue_box))
+                else:
+                    live.update(panel)
 
     player.stop()
     console.print("\n[dim]Playback stopped.[/dim]\n")
