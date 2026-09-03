@@ -4,6 +4,7 @@ import os
 import select
 import sys
 import termios
+import threading
 import time
 import tty
 from typing import List, Optional
@@ -18,9 +19,15 @@ from rich.table import Table
 from rich.text import Text
 
 from music.auth import get_auth_status
+from music.config import get_config_val
 from music.history import add_to_history
 from music.player import MpvPlayer
-from music.search import SongItem, format_duration, resolve_audio_stream_url
+from music.search import (
+    SongItem,
+    format_duration,
+    get_related_tracks,
+    resolve_audio_stream_url,
+)
 
 console = Console()
 
@@ -144,7 +151,14 @@ class KeyReader:
             return None
 
 
-def render_player_panel(song: SongItem, status: dict, auth_info: dict, message: str = "") -> Panel:
+def render_player_panel(
+    song: SongItem,
+    status: dict,
+    auth_info: dict,
+    message: str = "",
+    autoplay: bool = True,
+    next_song: Optional[SongItem] = None,
+) -> Panel:
     """Build the Rich UI Panel for current playback state."""
     state = status.get("state", "loading")
     time_pos = status.get("time_pos", 0.0)
@@ -171,8 +185,11 @@ def render_player_panel(song: SongItem, status: dict, auth_info: dict, message: 
     else:
         auth_badge = "[yellow]Standard (Public / Ads)[/yellow]"
 
+    # Autoplay badge
+    autoplay_badge = "[bold green]∞ Autoplay ON[/bold green]" if autoplay else "[dim]∞ Autoplay OFF[/dim]"
+
     # Header line
-    header_text = Text.from_markup(f"  {state_badge}    [dim]•[/dim]    {auth_badge}")
+    header_text = Text.from_markup(f"  {state_badge}    [dim]•[/dim]    {auth_badge}    [dim]•[/dim]    {autoplay_badge}")
 
     # Song details
     song_info = Table.grid(padding=(0, 2))
@@ -183,6 +200,8 @@ def render_player_panel(song: SongItem, status: dict, auth_info: dict, message: 
     song_info.add_row("Artist:", f"[bold yellow]{song.artist}[/bold yellow]")
     if song.album:
         song_info.add_row("Album:", f"[dim]{song.album}[/dim]")
+    if next_song:
+        song_info.add_row("Up Next:", f"[bold cyan]{next_song.title}[/bold cyan] [dim]by {next_song.artist}[/dim]")
     song_info.add_row("Source:", f"[dim underline]{song.url}[/dim underline]")
 
     # Progress bar calculation
@@ -209,11 +228,11 @@ def render_player_panel(song: SongItem, status: dict, auth_info: dict, message: 
     # Keybinds footer
     controls = Text.from_markup(
         r"[bold white][Space][/bold white] Play/Pause   "
+        r"[bold white][n][/bold white] Next   "
         r"[bold white][←/→][/bold white] ±5s   "
-        r"[bold white][\[/\]][/bold white] ±30s   "
         r"[bold white][↑/↓][/bold white] Vol   "
         r"[bold white][m][/bold white] Mute   "
-        r"[bold white][r][/bold white] Replay   "
+        r"[bold white][a][/bold white] Autoplay   "
         r"[bold white][q][/bold white] Quit"
     )
 
@@ -244,13 +263,38 @@ def render_player_panel(song: SongItem, status: dict, auth_info: dict, message: 
     )
 
 
-def run_player_loop(song: SongItem, player: MpvPlayer) -> None:
-    """Main interactive loop for song playback and keyboard control."""
+def run_player_loop(song: SongItem, player: MpvPlayer, autoplay: Optional[bool] = None) -> None:
+    """Main interactive loop for song playback, autoplay queue, and keyboard control."""
     auth_info = get_auth_status()
-    add_to_history(song)
+    if autoplay is None:
+        autoplay = get_config_val("autoplay", True)
 
-    console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{song.title}[/bold white]...")
-    stream_url = resolve_audio_stream_url(song)
+    curr_song = song
+    add_to_history(curr_song)
+
+    queue: List[SongItem] = []
+    seen_ids = {curr_song.video_id}
+    is_fetching = False
+
+    def fetch_queue(vid: str):
+        nonlocal is_fetching
+        is_fetching = True
+        try:
+            tracks = get_related_tracks(vid, limit=15)
+            for t in tracks:
+                if t.video_id not in seen_ids:
+                    seen_ids.add(t.video_id)
+                    queue.append(t)
+        except Exception:
+            pass
+        finally:
+            is_fetching = False
+
+    # Start background queue fetching
+    threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
+
+    console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{curr_song.title}[/bold white]...")
+    stream_url = resolve_audio_stream_url(curr_song)
 
     try:
         player.start()
@@ -277,6 +321,23 @@ def run_player_loop(song: SongItem, player: MpvPlayer) -> None:
                         break
                     elif key == " ":
                         player.toggle_pause()
+                    elif key in ("n", "N", ">"):
+                        if queue:
+                            curr_song = queue.pop(0)
+                            message = f"Skipping to: {curr_song.title}"
+                            msg_clear_time = time.time() + 2.0
+                            add_to_history(curr_song)
+                            stream_url = resolve_audio_stream_url(curr_song)
+                            player.play(stream_url)
+                            if len(queue) < 4 and not is_fetching:
+                                threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
+                        else:
+                            message = "Queue is empty"
+                            msg_clear_time = time.time() + 1.5
+                    elif key in ("a", "A"):
+                        autoplay = not autoplay
+                        message = f"Autoplay {'ON' if autoplay else 'OFF'}"
+                        msg_clear_time = time.time() + 1.5
                     elif key == "right":
                         player.seek(5)
                         message = "Seek +5s"
@@ -312,16 +373,54 @@ def run_player_loop(song: SongItem, player: MpvPlayer) -> None:
 
                 # Refresh display
                 status = player.get_status()
+                next_track = queue[0] if queue else None
+
                 if status["state"] == "error":
-                    live.update(render_player_panel(song, status, auth_info, message="[Playback Error - Could not load stream]"))
+                    live.update(
+                        render_player_panel(
+                            curr_song,
+                            status,
+                            auth_info,
+                            message="[Playback Error - Could not load stream]",
+                            autoplay=autoplay,
+                            next_song=next_track,
+                        )
+                    )
                     time.sleep(2.0)
                     break
                 elif status["state"] == "finished":
-                    live.update(render_player_panel(song, status, auth_info, message="[Playback Finished]"))
-                    time.sleep(1.0)
-                    break
+                    if autoplay and queue:
+                        curr_song = queue.pop(0)
+                        message = f"Autoplaying: {curr_song.title}"
+                        msg_clear_time = time.time() + 2.5
+                        add_to_history(curr_song)
+                        stream_url = resolve_audio_stream_url(curr_song)
+                        player.play(stream_url)
+                        if len(queue) < 4 and not is_fetching:
+                            threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
+                        continue
+                    else:
+                        live.update(
+                            render_player_panel(
+                                curr_song,
+                                status,
+                                auth_info,
+                                message="[Playback Finished]",
+                                autoplay=autoplay,
+                                next_song=next_track,
+                            )
+                        )
+                        time.sleep(1.0)
+                        break
 
-                panel = render_player_panel(song, status, auth_info, message)
+                panel = render_player_panel(
+                    curr_song,
+                    status,
+                    auth_info,
+                    message=message,
+                    autoplay=autoplay,
+                    next_song=next_track,
+                )
                 live.update(panel)
 
     player.stop()

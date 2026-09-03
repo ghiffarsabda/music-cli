@@ -59,8 +59,9 @@ While a track is playing in your terminal:
 | Key | Action |
 |---|---|
 | <kbd>Space</kbd> | Toggle Play / Pause |
+| <kbd>n</kbd> / <kbd>&gt;</kbd> | **Skip to Next track** (Autoplay queue) |
+| <kbd>a</kbd> | **Toggle Autoplay ON / OFF** |
 | <kbd>→</kbd> / <kbd>←</kbd> | Seek forward / backward 5 seconds |
-| <kbd>]</kbd> / <kbd>[</kbd> | Seek forward / backward 30 seconds |
 | <kbd>↑</kbd> / <kbd>↓</kbd> | Increase / decrease volume by 5% |
 | <kbd>m</kbd> | Toggle Mute |
 | <kbd>r</kbd> | Replay current track from start |

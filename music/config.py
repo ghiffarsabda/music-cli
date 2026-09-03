@@ -34,6 +34,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "volume": 80,
     "audio_quality": "best",  # 'best', 'high', 'medium'
     "auto_play_top": True,
+    "autoplay": True,  # Autoplay next track when song finishes
     "yt_dlp_path": detect_executable("yt-dlp", ["~/.local/bin/yt-dlp", "/usr/bin/yt-dlp"]),
     "node_path": detect_executable("node", ["~/.local/bin/node", "/usr/bin/node"]),
 }

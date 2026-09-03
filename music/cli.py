@@ -26,7 +26,7 @@ from music.ui import prompt_song_selection, run_player_loop
 console = Console()
 
 
-def handle_play_query(query: str, select_menu: bool = False) -> None:
+def handle_play_query(query: str, select_menu: bool = False, autoplay: Optional[bool] = None) -> None:
     """Search for query and start playback."""
     if is_youtube_url(query):
         console.print(f"[cyan]Resolving direct YouTube link...[/cyan]")
@@ -51,7 +51,7 @@ def handle_play_query(query: str, select_menu: bool = False) -> None:
 
     vol = get_config_val("volume", 80)
     player = MpvPlayer(initial_volume=vol)
-    run_player_loop(selected_song, player)
+    run_player_loop(selected_song, player, autoplay=autoplay)
 
 
 def handle_login(args: argparse.Namespace) -> None:
@@ -170,17 +170,22 @@ def main() -> None:
     subcommands = {"login", "config", "history", "search", "play", "url", "help"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
-        # Separate optional flags like -s / --select
+        # Separate optional flags like -s / --select, --no-autoplay, --autoplay
         select_menu = False
+        autoplay = None
         words = []
         for a in raw_args:
             if a in ("-s", "--select"):
                 select_menu = True
+            elif a == "--no-autoplay":
+                autoplay = False
+            elif a == "--autoplay":
+                autoplay = True
             else:
                 words.append(a)
         query = " ".join(words).strip()
         if query:
-            handle_play_query(query, select_menu=select_menu)
+            handle_play_query(query, select_menu=select_menu, autoplay=autoplay)
             return
 
     parser = argparse.ArgumentParser(
@@ -189,7 +194,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  music "Never Gonna Give You Up"          # Play top match directly
+  music "Never Gonna Give You Up"          # Play top match directly with autoplay
   music "Bohemian Rhapsody" -s             # Show search results list to pick from
   music search "Daft Punk"                 # Interactive search menu
   music url "https://music.youtube.com/..." # Stream direct URL
@@ -207,12 +212,18 @@ Examples:
     p_play = subparsers.add_parser("play", help="Search and stream a track")
     p_play.add_argument("query", nargs="+", help="Song title or query to search")
     p_play.add_argument("-s", "--select", action="store_true", help="Show interactive search picker")
+    p_play.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
+    p_play.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
 
     p_search = subparsers.add_parser("search", help="Search YouTube Music and select from list")
     p_search.add_argument("query", nargs="+", help="Song title or query to search")
+    p_search.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
+    p_search.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
 
     p_url = subparsers.add_parser("url", help="Stream direct YouTube / YouTube Music URL")
     p_url.add_argument("url", help="Direct YouTube or YouTube Music URL")
+    p_url.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
+    p_url.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
 
     # login subcommand
     p_login = subparsers.add_parser("login", help="Configure YouTube authentication (skip ads)")
@@ -238,9 +249,11 @@ Examples:
     if args.command in ("play", "search"):
         query = " ".join(args.query).strip()
         select_menu = getattr(args, "select", False) or args.command == "search"
-        handle_play_query(query, select_menu=select_menu)
+        ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
+        handle_play_query(query, select_menu=select_menu, autoplay=ap)
     elif args.command == "url":
-        handle_play_query(args.url, select_menu=False)
+        ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
+        handle_play_query(args.url, select_menu=False, autoplay=ap)
     elif args.command == "login":
         handle_login(args)
     elif args.command == "history":

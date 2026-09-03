@@ -294,3 +294,59 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
             pass
 
     return fallback_url
+
+
+def get_related_tracks(video_id: str, limit: int = 20) -> List[SongItem]:
+    """Fetch related / up-next radio tracks for autoplay using YouTube Music watch playlist."""
+    clean_vid = extract_video_id_from_url(video_id)
+
+    try:
+        from ytmusicapi import YTMusic
+
+        yt = YTMusic()
+        watch_data = yt.get_watch_playlist(videoId=clean_vid, limit=limit + 5)
+        tracks = watch_data.get("tracks", [])
+
+        items: List[SongItem] = []
+        for t in tracks:
+            vid = t.get("videoId")
+            if not vid or vid == clean_vid:
+                continue
+
+            title = t.get("title", "Unknown Title")
+            artists = t.get("artists", [])
+            if isinstance(artists, list):
+                artist = ", ".join(a.get("name", "") for a in artists if isinstance(a, dict)) or "Unknown Artist"
+            else:
+                artist = str(artists or "Unknown Artist")
+
+            album_data = t.get("album", {})
+            album = album_data.get("name", "") if isinstance(album_data, dict) else ""
+            dur_str = t.get("length", "")
+            dur_sec = parse_duration_str(dur_str)
+
+            thumbs = t.get("thumbnail", [])
+            thumb_url = thumbs[-1].get("url", "") if isinstance(thumbs, list) and thumbs else ""
+
+            items.append(
+                SongItem(
+                    title=title,
+                    artist=artist,
+                    album=album,
+                    duration=dur_str or format_duration(dur_sec),
+                    duration_seconds=dur_sec,
+                    video_id=vid,
+                    url=f"https://www.youtube.com/watch?v={vid}",
+                    thumbnail=thumb_url,
+                )
+            )
+
+            if len(items) >= limit:
+                break
+
+        if items:
+            return items
+    except Exception:
+        pass
+
+    return []

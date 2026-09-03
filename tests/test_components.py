@@ -87,10 +87,20 @@ def test_player_ipc():
         assert not player.process_is_alive()
 
 
+def test_related_tracks():
+    from music.search import get_related_tracks
+    tracks = get_related_tracks("lYBUbBu4W08", limit=3)
+    assert len(tracks) > 0, "No related tracks returned for autoplay"
+    assert tracks[0].video_id != "lYBUbBu4W08", "Current track should not be in related queue"
+    assert tracks[0].title, "Related track should have title"
+    print(f"✓ Autoplay related tracks test passed: Next up is '{tracks[0].title}' by '{tracks[0].artist}'")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
     test_auth_status()
     test_search()
     test_player_ipc()
+    test_related_tracks()
     print("\n🎉 ALL TESTS PASSED!")
