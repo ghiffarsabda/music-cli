@@ -317,11 +317,11 @@ def render_player_panel(
         r"[bold white][Space][/bold white] Play/Pause   "
         r"[bold white]\[/][/bold white] Search   "
         r"[bold white][Tab][/bold white] Queue   "
-        r"[bold white][n][/bold white] Next   "
+        r"[bold white][N][/bold white] Next   "
         r"[bold white][←/→][/bold white] ±5s   "
         r"[bold white][↑/↓][/bold white] Vol   "
-        r"[bold white][m][/bold white] Mute   "
-        r"[bold white][q][/bold white] Quit"
+        r"[bold white][M][/bold white] Mute   "
+        r"[bold white][Q][/bold white] Quit"
     )
 
     elements = [
@@ -539,7 +539,6 @@ def run_player_loop(
     QUEUE_PAGE_SIZE = 5
     queue_notif_msg = ""
     queue_notif_clear = 0.0
-    lyrics_offset = float(get_config_val("lyrics_offset", 1.2))
 
     with KeyReader() as key_reader:
         with Live(console=console, refresh_per_second=10, transient=False) as live:
@@ -561,7 +560,7 @@ def run_player_loop(
                 # Handle keyboard inputs
                 key = key_reader.get_key(timeout=0.08)
                 if key:
-                    if key in ("q", "quit"):
+                    if key in ("q", "Q", "quit"):
                         break
                     elif key == " ":
                         player.toggle_pause()
@@ -740,14 +739,6 @@ def run_player_loop(
                         player.restart()
                         message = "Replaying track"
                         msg_clear_time = time.time() + 1.2
-                    elif key in (",", "<"):
-                        lyrics_offset -= 0.5
-                        message = f"🎤 Lyrics Sync: {lyrics_offset:+.1f}s"
-                        msg_clear_time = time.time() + 1.5
-                    elif key in (".", ">"):
-                        lyrics_offset += 0.5
-                        message = f"🎤 Lyrics Sync: {lyrics_offset:+.1f}s"
-                        msg_clear_time = time.time() + 1.5
 
                 # Check for automatic gapless transition from MPV
                 playlist_pos = player.get_playlist_pos()
@@ -780,7 +771,7 @@ def run_player_loop(
                 # Calculate lyrics display window
                 lyrics_win = None
                 if show_lyrics:
-                    lyrics_win, _ = get_lyrics_display_window(current_lyrics, status.get("time_pos", 0.0), offset=lyrics_offset)
+                    lyrics_win, _ = get_lyrics_display_window(current_lyrics, status.get("time_pos", 0.0))
 
                 cur_pos_str = f"({playlist_index}/{playlist_total})" if playlist_total else ""
 
