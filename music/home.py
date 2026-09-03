@@ -1,9 +1,10 @@
 """Interactive OpenCode-styled Home View for music-cli.
 
-Provides a centered, minimalist search bar with live dropdown suggestions for tracks,
-playlists, and history, styled following OpenCode's TUI design language.
+Provides a vertically and horizontally centered, minimalist search bar with live animated
+loading dropdown suggestions for tracks, playlists, and history.
 """
 
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from music.search import (
     search_playlists,
 )
 from music.ui import KeyReader, run_player_loop
+
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
 
 @dataclass
@@ -141,9 +144,11 @@ def render_home_screen(
     selected_idx: int,
     is_searching: bool,
     console_width: int = 80,
+    console_height: int = 24,
 ) -> Group:
-    """Build the OpenCode-styled home layout with centered search and dropdown."""
+    """Build the OpenCode-styled home layout with vertical and horizontal centering."""
     panel_width = min(72, max(52, console_width - 6))
+    inner_width = panel_width - 6
 
     # 1. Minimalist OpenCode Brand Header
     header = Align.center(
@@ -181,86 +186,116 @@ def render_home_screen(
         padding=(0, 1),
     )
 
-    # 3. Dynamic Dropdown List
-    # Calculate column proportions to prevent wrapping
-    inner_width = panel_width - 6
-    col_cursor = 2
-    col_kind = 12
-    col_extra = 11
-    rem_width = max(24, inner_width - col_cursor - col_kind - col_extra)
-    col_title = int(rem_width * 0.60)
-    col_sub = rem_width - col_title
+    # 3. Dynamic Dropdown List / Animated Loading State
+    if is_searching and query.strip():
+        spinner = SPINNER_FRAMES[int(time.time() * 10) % len(SPINNER_FRAMES)]
+        loading_table = Table.grid(padding=(0, 1))
+        loading_table.add_column(width=3, justify="center")
+        loading_table.add_column(width=inner_width - 3, no_wrap=True)
 
-    items_table = Table.grid(padding=(0, 1))
-    items_table.add_column(width=col_cursor, justify="center")
-    items_table.add_column(width=col_kind)
-    items_table.add_column(width=col_title, no_wrap=True)
-    items_table.add_column(width=col_sub, no_wrap=True)
-    items_table.add_column(width=col_extra, justify="right", no_wrap=True)
-
-    if items:
-        for idx, itm in enumerate(items):
-            is_active = idx == selected_idx
-
-            if itm.kind == "track":
-                kind_badge = "🎵 Track"
-                kind_style = "bold magenta" if is_active else "dim magenta"
-            elif itm.kind == "playlist":
-                kind_badge = "📋 Playlist"
-                kind_style = "bold cyan" if is_active else "dim cyan"
-            elif itm.kind == "history":
-                kind_badge = "🕒 History"
-                kind_style = "bold yellow" if is_active else "dim yellow"
-            else:
-                kind_badge = "✨ Featured"
-                kind_style = "bold green" if is_active else "dim green"
-
-            trunc_title = truncate_str(itm.title, col_title)
-            trunc_sub = truncate_str(itm.subtitle, col_sub)
-            trunc_extra = truncate_str(itm.extra, col_extra)
-
-            if is_active:
-                items_table.add_row(
-                    "[bold cyan]▶[/bold cyan]",
-                    f"[{kind_style}]{kind_badge}[/{kind_style}]",
-                    f"[bold bright_white]{trunc_title}[/bold bright_white]",
-                    f"[bold bright_yellow]{trunc_sub}[/bold bright_yellow]",
-                    f"[bold cyan]{trunc_extra}[/bold cyan]",
-                )
-            else:
-                items_table.add_row(
-                    " ",
-                    f"[{kind_style}]{kind_badge}[/{kind_style}]",
-                    f"[white]{trunc_title}[/white]",
-                    f"[dim yellow]{trunc_sub}[/dim yellow]",
-                    f"[dim cyan]{trunc_extra}[/dim cyan]",
-                )
-    else:
-        items_table.add_row(
+        loading_table.add_row(
+            f"[bold bright_cyan]{spinner}[/bold bright_cyan]",
+            f"[bold white]Searching YouTube Music for:[/bold white] [bold bright_cyan]\"{truncate_str(query, 30)}\"[/bold bright_cyan]...",
+        )
+        loading_table.add_row(
             " ",
-            "",
-            "[dim]No matching results found[/dim]",
-            "",
-            "",
+            "[dim]Querying matching songs and community playlists...[/dim]",
+        )
+        loading_table.add_row(
+            " ",
+            "[dim cyan]╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌[/dim cyan]",
+        )
+        loading_table.add_row(
+            "[bold cyan]⚡[/bold cyan]",
+            "[dim]Pre-caching audio streams & time-synced lyrics...[/dim]",
         )
 
-    # Dropdown Panel Title
-    if is_searching:
-        res_title = "[dim]Results  [cyan]⌛ Searching...[/cyan][/dim]"
-    elif query:
-        res_title = f"[dim]Results ({len(items)})[/dim]"
+        dropdown_panel = Panel(
+            loading_table,
+            title=f"[dim]Results  [bold bright_cyan]{spinner} Loading...[/bold bright_cyan][/dim]",
+            title_align="left",
+            box=box.ROUNDED,
+            border_style="bright_cyan",
+            width=panel_width,
+            padding=(1, 2),
+        )
     else:
-        res_title = "[dim]Quick Picks & Recent History[/dim]"
+        # Calculate column proportions to prevent wrapping
+        col_cursor = 2
+        col_kind = 12
+        col_extra = 11
+        rem_width = max(24, inner_width - col_cursor - col_kind - col_extra)
+        col_title = int(rem_width * 0.60)
+        col_sub = rem_width - col_title
 
-    dropdown_panel = Panel(
-        items_table,
-        title=res_title,
-        title_align="left",
-        box=box.ROUNDED,
-        border_style="blue",
-        width=panel_width,
-        padding=(0, 1),
-    )
+        items_table = Table.grid(padding=(0, 1))
+        items_table.add_column(width=col_cursor, justify="center")
+        items_table.add_column(width=col_kind)
+        items_table.add_column(width=col_title, no_wrap=True)
+        items_table.add_column(width=col_sub, no_wrap=True)
+        items_table.add_column(width=col_extra, justify="right", no_wrap=True)
+
+        if items:
+            for idx, itm in enumerate(items):
+                is_active = idx == selected_idx
+
+                if itm.kind == "track":
+                    kind_badge = "🎵 Track"
+                    kind_style = "bold magenta" if is_active else "dim magenta"
+                elif itm.kind == "playlist":
+                    kind_badge = "📋 Playlist"
+                    kind_style = "bold cyan" if is_active else "dim cyan"
+                elif itm.kind == "history":
+                    kind_badge = "🕒 History"
+                    kind_style = "bold yellow" if is_active else "dim yellow"
+                else:
+                    kind_badge = "✨ Featured"
+                    kind_style = "bold green" if is_active else "dim green"
+
+                trunc_title = truncate_str(itm.title, col_title)
+                trunc_sub = truncate_str(itm.subtitle, col_sub)
+                trunc_extra = truncate_str(itm.extra, col_extra)
+
+                if is_active:
+                    items_table.add_row(
+                        "[bold cyan]▶[/bold cyan]",
+                        f"[{kind_style}]{kind_badge}[/{kind_style}]",
+                        f"[bold bright_white]{trunc_title}[/bold bright_white]",
+                        f"[bold bright_yellow]{trunc_sub}[/bold bright_yellow]",
+                        f"[bold cyan]{trunc_extra}[/bold cyan]",
+                    )
+                else:
+                    items_table.add_row(
+                        " ",
+                        f"[{kind_style}]{kind_badge}[/{kind_style}]",
+                        f"[white]{trunc_title}[/white]",
+                        f"[dim yellow]{trunc_sub}[/dim yellow]",
+                        f"[dim cyan]{trunc_extra}[/dim cyan]",
+                    )
+        else:
+            items_table.add_row(
+                " ",
+                "",
+                "[dim]No matching results found[/dim]",
+                "",
+                "",
+            )
+
+        # Dropdown Panel Title
+        if query:
+            res_title = f"[dim]Results ({len(items)})[/dim]"
+        else:
+            res_title = "[dim]Quick Picks & Recent History[/dim]"
+
+        dropdown_panel = Panel(
+            items_table,
+            title=res_title,
+            title_align="left",
+            box=box.ROUNDED,
+            border_style="blue",
+            width=panel_width,
+            padding=(0, 1),
+        )
 
     # 4. Minimalist Footer Shortcuts
     footer = Align.center(
@@ -269,28 +304,28 @@ def render_home_screen(
         )
     )
 
-    return Group(
-        Text(""),
+    # 5. Vertical Centering Calculation
+    # Height of content: header (2) + gap (1) + search (3) + dropdown (~8) + gap (1) + footer (1) = ~16 lines
+    content_height = 16
+    top_pad = max(1, (console_height - content_height) // 2)
+
+    elements = []
+    if top_pad > 1:
+        elements.append(Text("\n" * (top_pad - 1)))
+    elements.extend([
         header,
         Text(""),
         Align.center(search_panel),
         Align.center(dropdown_panel),
         Text(""),
         footer,
-        Text(""),
-    )
+    ])
+
+    return Group(*elements)
 
 
 def run_home_view() -> Optional[Tuple[str, Any]]:
-    """Interactive loop for the OpenCode-styled home view.
-
-    Returns:
-        Optional[Tuple[str, Any]]:
-            ("track", SongItem) -> Stream single song
-            ("playlist", PlaylistItem) -> Stream playlist
-            ("query", str) -> Stream search query
-            None -> Exit
-    """
+    """Interactive loop for the OpenCode-styled home view."""
     console = Console()
 
     query = ""
@@ -310,14 +345,22 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
     def search_worker():
         nonlocal items, is_searching, last_searched_query, last_searched_mode
         while running:
-            time.sleep(0.06)
+            time.sleep(0.04)
             current_q = query.strip()
             current_mode = filter_modes[filter_idx]
 
-            # Check if query or filter mode changed and debounce elapsed (250ms)
-            if (current_q != last_searched_query or current_mode != last_searched_mode) and (time.time() - last_key_time > 0.25):
-                with lock:
-                    is_searching = True
+            # If user cleared the query, restore default items immediately
+            if not current_q:
+                if last_searched_query != "":
+                    with lock:
+                        items = get_default_items()
+                        last_searched_query = ""
+                        last_searched_mode = current_mode
+                        is_searching = False
+                continue
+
+            # Check if query or filter mode changed and debounce elapsed (220ms)
+            if (current_q != last_searched_query or current_mode != last_searched_mode) and (time.time() - last_key_time > 0.22):
                 new_items = fetch_dropdown_results(current_q, current_mode)
                 with lock:
                     items = new_items
@@ -334,7 +377,9 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
         with Live(console=console, refresh_per_second=15, transient=True) as live:
             while True:
                 cursor_on = (int(time.time() * 2) % 2) == 0
-                term_w = console.width or 80
+                term_size = shutil.get_terminal_size((80, 24))
+                term_w = term_size.columns
+                term_h = term_size.lines
 
                 with lock:
                     curr_items = list(items)
@@ -348,6 +393,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                     selected_idx=selected_idx,
                     is_searching=searching,
                     console_width=term_w,
+                    console_height=term_h,
                 )
                 live.update(screen)
 
@@ -361,7 +407,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
 
                 elif key == "up":
                     if curr_items:
-                        selected_idx = max(-1, selected_idx - 1)
+                        selected_idx = max(0, selected_idx - 1)
 
                 elif key == "down":
                     if curr_items:
@@ -369,12 +415,16 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
 
                 elif key in ("tab", "\t"):
                     filter_idx = (filter_idx + 1) % len(filter_modes)
+                    with lock:
+                        if query.strip():
+                            is_searching = True
                     last_key_time = time.time()
                     selected_idx = 0
 
                 elif key in ("\r", "\n", "enter"):
                     running = False
-                    if 0 <= selected_idx < len(curr_items):
+                    # If an item in dropdown is active and not searching
+                    if not searching and 0 <= selected_idx < len(curr_items):
                         chosen = curr_items[selected_idx]
                         if chosen.kind in ("track", "history"):
                             return ("track", chosen.data)
@@ -382,7 +432,7 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                             return ("playlist", chosen.data)
                         elif chosen.kind == "preset":
                             return ("query", chosen.data)
-                    # If search bar focused or empty selection, use raw query
+                    # If raw query entered
                     if query.strip():
                         if is_playlist_url(query):
                             return ("playlist_url", query.strip())
@@ -394,15 +444,26 @@ def run_home_view() -> Optional[Tuple[str, Any]]:
                 elif key in ("\x7f", "\x08", "backspace"):
                     if query:
                         query = query[:-1]
+                        with lock:
+                            if query.strip():
+                                is_searching = True
+                            else:
+                                is_searching = False
+                                items = get_default_items()
                         last_key_time = time.time()
                         selected_idx = 0
 
-                elif key == "\x15":  # Ctrl+U (clear query)
+                elif key in ("ctrl_u", "\x15"):
                     query = ""
+                    with lock:
+                        is_searching = False
+                        items = get_default_items()
                     last_key_time = time.time()
                     selected_idx = 0
 
                 elif len(key) == 1 and key.isprintable():
                     query += key
+                    with lock:
+                        is_searching = True
                     last_key_time = time.time()
                     selected_idx = 0

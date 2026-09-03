@@ -117,56 +117,71 @@ class KeyReader:
 
     def __init__(self):
         self.old_settings = None
+        self.fd: Optional[int] = None
 
     def __enter__(self):
         if sys.stdin.isatty():
             try:
-                self.old_settings = termios.tcgetattr(sys.stdin)
-                tty.setcbreak(sys.stdin.fileno())
+                self.fd = sys.stdin.fileno()
+                self.old_settings = termios.tcgetattr(self.fd)
+                tty.setcbreak(self.fd)
             except Exception:
                 self.old_settings = None
+                self.fd = None
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.old_settings:
+        if self.old_settings and self.fd is not None:
             try:
-                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
             except Exception:
                 pass
 
     def get_key(self, timeout: float = 0.05) -> Optional[str]:
-        """Read a single keypress or key escape sequence within timeout."""
-        if not sys.stdin.isatty():
+        """Read a single keypress or key escape sequence within timeout using unbuffered os.read."""
+        if not sys.stdin.isatty() or self.fd is None:
             time.sleep(timeout)
             return None
 
-        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        rlist, _, _ = select.select([self.fd], [], [], timeout)
         if not rlist:
             return None
 
         try:
-            ch1 = sys.stdin.read(1)
-            if ch1 == "\x1b":  # Escape sequence
-                rlist, _, _ = select.select([sys.stdin], [], [], 0.02)
-                if not rlist:
-                    return "escape"
-                ch2 = sys.stdin.read(1)
-                if ch2 == "[":
-                    rlist, _, _ = select.select([sys.stdin], [], [], 0.02)
-                    if not rlist:
-                        return "escape"
-                    ch3 = sys.stdin.read(1)
-                    if ch3 == "A":
-                        return "up"
-                    elif ch3 == "B":
-                        return "down"
-                    elif ch3 == "C":
-                        return "right"
-                    elif ch3 == "D":
-                        return "left"
-            elif ch1 == "\x03":  # Ctrl-C
+            raw = os.read(self.fd, 32)
+            if not raw:
+                return None
+
+            # Escape sequences (Arrows, Home, End, Delete)
+            if raw in (b"\x1b[A", b"\x1bOA"):
+                return "up"
+            elif raw in (b"\x1b[B", b"\x1bOB"):
+                return "down"
+            elif raw in (b"\x1b[C", b"\x1bOC"):
+                return "right"
+            elif raw in (b"\x1b[D", b"\x1bOD"):
+                return "left"
+            elif raw in (b"\x1b[H", b"\x1b[1~"):
+                return "home"
+            elif raw in (b"\x1b[F", b"\x1b[4~"):
+                return "end"
+            elif raw in (b"\x1b[3~",):
+                return "delete"
+            elif raw == b"\x1b":
+                return "escape"
+            elif raw == b"\x03":  # Ctrl-C
                 return "quit"
-            return ch1
+            elif raw in (b"\r", b"\n"):
+                return "enter"
+            elif raw == b"\t":
+                return "tab"
+            elif raw in (b"\x7f", b"\x08"):
+                return "backspace"
+            elif raw == b"\x15":  # Ctrl-U
+                return "ctrl_u"
+
+            # Decode normal printable UTF-8 character
+            return raw.decode("utf-8", errors="ignore")
         except Exception:
             return None
 
