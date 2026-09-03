@@ -9,6 +9,7 @@ import time
 import tty
 from typing import Dict, List, Optional, Set, Tuple
 
+from rich import box
 from rich.align import Align
 from rich.console import Console, Group
 from rich.live import Live
