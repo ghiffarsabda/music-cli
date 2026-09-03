@@ -262,23 +262,8 @@ def render_player_panel(
     else:
         state_badge = f"[bold dim]{state.upper()}[/bold dim]"
 
-    # Auth badge
-    if auth_info.get("mode") != "none":
-        auth_badge = "[bold green]✓ Subscribed/Ad-Free[/bold green]"
-    else:
-        auth_badge = "[yellow]Standard (Public / Ads)[/yellow]"
-
-    # Autoplay badge
-    autoplay_badge = "[bold green]∞ Autoplay ON[/bold green]" if autoplay else "[dim]∞ Autoplay OFF[/dim]"
-
-    # AdBlock badge
-    adblock_badge = "[bold green]🛡️ AdBlock ON[/bold green]" if ad_blocker else "[dim]🛡️ AdBlock OFF[/dim]"
-
-    # Lyrics badge
-    lyrics_badge = "[bold magenta]🎤 Lyrics ON[/bold magenta]" if show_lyrics else "[dim]🎤 Lyrics OFF[/dim]"
-
     # Header line
-    header_text = Text.from_markup(f"  {state_badge}    [dim]•[/dim]    {auth_badge}    [dim]•[/dim]    {autoplay_badge}    [dim]•[/dim]    {adblock_badge}    [dim]•[/dim]    {lyrics_badge}")
+    header_text = Text.from_markup(f"  {state_badge}")
 
     # Song details
     song_info = Table.grid(padding=(0, 2))

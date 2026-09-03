@@ -434,8 +434,7 @@ def render_home_screen(
     else:
         header = Align.center(
             Text.from_markup(
-                "[bold bright_cyan]♫  m u s i c  -  c l i[/bold bright_cyan]  [dim]v0.1.0[/dim]\n"
-                "[green]● Online[/green]  [dim]•[/dim]  [cyan]YouTube Music[/cyan]  [dim]•[/dim]  [magenta]Karaoke Ready[/magenta]  [dim]•[/dim]  [green]🛡️ AdBlock[/green]"
+                "[bold bright_cyan]♫  m u s i c  -  c l i[/bold bright_cyan]  [dim]v0.1.0[/dim]"
             )
         )
 
