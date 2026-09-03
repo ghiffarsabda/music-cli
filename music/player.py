@@ -28,6 +28,7 @@ class MpvPlayer:
         self._cached_volume: int = initial_volume
         self._last_time_pos: float = 0.0
         self._is_eof = False
+        self._play_start_time: float = 0.0
         self._req_id = 0
         self._sock_file = None
 
@@ -49,7 +50,6 @@ class MpvPlayer:
         yt_dlp_bin = get_config_val("yt_dlp_path", shutil.which("yt-dlp") or "yt-dlp")
         node_bin = get_config_val("node_path", shutil.which("node") or "")
         js_runtime_opt = f"js-runtimes=node:{node_bin}" if node_bin else ""
-
         cmd = [
             mpv_bin,
             "--no-video",
@@ -57,6 +57,7 @@ class MpvPlayer:
             f"--input-ipc-server={self.sock_path}",
             f"--volume={self.initial_volume}",
             f"--script-opts=ytdl_hook-ytdl_path={yt_dlp_bin}",
+            "--ytdl-raw-options-append=remote-components=ejs:github",
             "--ytdl-format=bestaudio/best",
             "--keep-open=no",
             "--force-window=no",
@@ -133,6 +134,7 @@ class MpvPlayer:
         self._cached_duration = 0.0
         self._last_time_pos = 0.0
         self._is_eof = False
+        self._play_start_time = time.time()
         res = self._send_command(["loadfile", url, "replace"])
         return res is not None or self.process_is_alive()
 
@@ -214,7 +216,10 @@ class MpvPlayer:
         if eof_reached:
             state = "finished"
         elif idle_active and self._last_time_pos == 0.0:
-            state = "loading"
+            if self._play_start_time > 0 and (time.time() - self._play_start_time) > 12.0:
+                state = "error"
+            else:
+                state = "loading"
         elif idle_active and self._last_time_pos > 0.0:
             state = "finished"
         elif paused:

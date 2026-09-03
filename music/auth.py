@@ -79,13 +79,13 @@ def get_ytdl_auth_args() -> List[str]:
     cfg = load_config()
     mode = cfg.get("auth_mode", "none")
 
-    if mode == "browser":
-        spec = get_browser_specifier()
-        return ["--cookies-from-browser", spec]
-    elif mode == "cookies_file":
+    if mode in ("browser", "cookies_file"):
         cfile = cfg.get("cookies_file", str(COOKIES_FILE))
-        if os.path.isfile(cfile):
+        if os.path.isfile(cfile) and os.path.getsize(cfile) > 0:
             return ["--cookies", cfile]
+        if mode == "browser":
+            spec = get_browser_specifier()
+            return ["--cookies-from-browser", spec]
     return []
 
 
@@ -94,18 +94,45 @@ def get_mpv_auth_args() -> List[str]:
     cfg = load_config()
     mode = cfg.get("auth_mode", "none")
 
-    if mode == "browser":
-        spec = get_browser_specifier()
-        return [f"--ytdl-raw-options-append=cookies-from-browser={spec}"]
-    elif mode == "cookies_file":
+    if mode in ("browser", "cookies_file"):
         cfile = cfg.get("cookies_file", str(COOKIES_FILE))
-        if os.path.isfile(cfile):
+        if os.path.isfile(cfile) and os.path.getsize(cfile) > 0:
             return [f"--ytdl-raw-options-append=cookies={cfile}"]
+        if mode == "browser":
+            spec = get_browser_specifier()
+            return [f"--ytdl-raw-options-append=cookies-from-browser={spec}"]
     return []
 
 
+def export_browser_cookies(browser_name: str, profile_key: str = "") -> bool:
+    """Export browser cookies once into cookies.txt for fast, lock-free streaming."""
+    yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+    node_bin = get_config_val("node_path", "node")
+    spec = f"{browser_name}:{profile_key}" if profile_key else browser_name
+
+    cmd = [
+        yt_dlp,
+        "--js-runtimes",
+        f"node:{node_bin}",
+        "--remote-components",
+        "ejs:github",
+        "--cookies-from-browser",
+        spec,
+        "--cookies",
+        str(COOKIES_FILE),
+        "--simulate",
+        "--no-warnings",
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=25)
+        return proc.returncode == 0 and COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0
+    except Exception:
+        return False
+
+
 def set_browser_login(browser_name: str, profile_key: str = "", email: str = "") -> Tuple[bool, str]:
-    """Set authentication via browser and optional profile."""
+    """Set authentication via browser and optional profile, exporting cookies for speed."""
     b_clean = browser_name.lower().strip()
     if b_clean not in SUPPORTED_BROWSERS:
         return (
@@ -113,10 +140,15 @@ def set_browser_login(browser_name: str, profile_key: str = "", email: str = "")
             f"Unsupported browser '{browser_name}'. Supported: {', '.join(SUPPORTED_BROWSERS)}",
         )
 
+    # Export cookies once to eliminate SQLite lock delays and SecretStorage hangs during playback
+    console.print(f"[cyan]Exporting session cookies from {b_clean} for fast playback...[/cyan]")
+    export_browser_cookies(b_clean, profile_key)
+
     set_config_val("auth_mode", "browser")
     set_config_val("browser", b_clean)
     set_config_val("profile", profile_key)
     set_config_val("account_email", email)
+    set_config_val("cookies_file", str(COOKIES_FILE))
 
     display_acc = f" ({email})" if email else ""
     display_prof = f" [{profile_key}]" if profile_key else ""

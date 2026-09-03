@@ -20,7 +20,7 @@ from rich.text import Text
 from music.auth import get_auth_status
 from music.history import add_to_history
 from music.player import MpvPlayer
-from music.search import SongItem, format_duration
+from music.search import SongItem, format_duration, resolve_audio_stream_url
 
 console = Console()
 
@@ -249,13 +249,16 @@ def run_player_loop(song: SongItem, player: MpvPlayer) -> None:
     auth_info = get_auth_status()
     add_to_history(song)
 
+    console.print(f"[cyan]⌛ Preparing audio stream for:[/cyan] [bold white]{song.title}[/bold white]...")
+    stream_url = resolve_audio_stream_url(song)
+
     try:
         player.start()
     except Exception as e:
         console.print(f"[bold red]Failed to start player backend:[/bold red] {e}")
         return
 
-    player.play(song.url)
+    player.play(stream_url)
 
     message = ""
     msg_clear_time = 0.0
@@ -309,7 +312,11 @@ def run_player_loop(song: SongItem, player: MpvPlayer) -> None:
 
                 # Refresh display
                 status = player.get_status()
-                if status["state"] == "finished":
+                if status["state"] == "error":
+                    live.update(render_player_panel(song, status, auth_info, message="[Playback Error - Could not load stream]"))
+                    time.sleep(2.0)
+                    break
+                elif status["state"] == "finished":
                     live.update(render_player_panel(song, status, auth_info, message="[Playback Finished]"))
                     time.sleep(1.0)
                     break

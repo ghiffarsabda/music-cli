@@ -80,7 +80,7 @@ def resolve_direct_item(url_or_id: str) -> Optional[SongItem]:
     """Resolve metadata for a direct YouTube URL or video ID using yt-dlp."""
     yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
     vid = extract_video_id_from_url(url_or_id)
-    url = f"https://music.youtube.com/watch?v={vid}"
+    url = f"https://www.youtube.com/watch?v={vid}"
 
     cmd = [
         yt_dlp,
@@ -175,7 +175,7 @@ def search_music(query: str, limit: int = 5) -> List[SongItem]:
                     duration=dur_str or format_duration(duration_sec),
                     duration_seconds=int(duration_sec or 0),
                     video_id=vid,
-                    url=f"https://music.youtube.com/watch?v={vid}",
+                    url=f"https://www.youtube.com/watch?v={vid}",
                     thumbnail=thumb_url,
                 )
             )
@@ -229,9 +229,68 @@ def search_ytdlp_fallback(query: str, limit: int = 5) -> List[SongItem]:
                     duration=format_duration(dur),
                     duration_seconds=int(dur),
                     video_id=vid,
-                    url=f"https://music.youtube.com/watch?v={vid}",
+                    url=f"https://www.youtube.com/watch?v={vid}",
                 )
             )
         return items
     except Exception:
         return []
+
+
+def resolve_audio_stream_url(song_item_or_url: Any) -> str:
+    """Resolve direct audio stream URL (googlevideo.com) using yt-dlp for instant playback."""
+    if isinstance(song_item_or_url, SongItem):
+        vid = song_item_or_url.video_id
+        fallback_url = song_item_or_url.url
+    else:
+        vid = extract_video_id_from_url(str(song_item_or_url))
+        fallback_url = f"https://www.youtube.com/watch?v={vid}"
+
+    yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+    target_url = f"https://www.youtube.com/watch?v={vid}"
+
+    # Fast direct extraction (clean stream avoids GVS PO token delay and starts in seconds)
+    cmd = [
+        yt_dlp,
+        "-f", "ba/b",
+        "-g",
+        "--no-warnings",
+        target_url,
+    ]
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=12)
+        if proc.returncode == 0:
+            lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
+            if lines:
+                return lines[-1]
+    except Exception:
+        pass
+
+    # If fast extraction failed (e.g. member-only or private track), try with cookies
+    from music.auth import get_ytdl_auth_args
+
+    auth_args = get_ytdl_auth_args()
+    if auth_args:
+        node_bin = get_config_val("node_path", "")
+        cmd_auth = [
+            yt_dlp,
+            *auth_args,
+            "-f", "ba/b",
+            "-g",
+            "--no-warnings",
+            target_url,
+        ]
+        if node_bin:
+            cmd_auth.extend(["--js-runtimes", f"node:{node_bin}"])
+            cmd_auth.extend(["--remote-components", "ejs:github"])
+        try:
+            proc = subprocess.run(cmd_auth, capture_output=True, text=True, timeout=15)
+            if proc.returncode == 0:
+                lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
+                if lines:
+                    return lines[-1]
+        except Exception:
+            pass
+
+    return fallback_url
