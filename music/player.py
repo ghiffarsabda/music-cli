@@ -46,6 +46,7 @@ class MpvPlayer:
         if not mpv_bin:
             raise RuntimeError("mpv executable not found. Please ensure mpv is installed.")
 
+        yt_dlp_bin = get_config_val("yt_dlp_path", shutil.which("yt-dlp") or "yt-dlp")
         node_bin = get_config_val("node_path", shutil.which("node") or "")
         js_runtime_opt = f"js-runtimes=node:{node_bin}" if node_bin else ""
 
@@ -55,6 +56,7 @@ class MpvPlayer:
             "--idle=yes",
             f"--input-ipc-server={self.sock_path}",
             f"--volume={self.initial_volume}",
+            f"--script-opts=ytdl_hook-ytdl_path={yt_dlp_bin}",
             "--ytdl-format=bestaudio/best",
             "--keep-open=no",
             "--force-window=no",

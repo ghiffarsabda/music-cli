@@ -1,13 +1,22 @@
 """Authentication and cookie manager for YouTube Music streaming."""
 
+import json
 import os
 import shutil
 import subprocess
+import webbrowser
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 from music.config import COOKIES_FILE, get_config_val, load_config, set_config_val
 
+console = Console()
+
+GOOGLE_LOGIN_URL = "https://accounts.google.com/AccountChooser?continue=https://music.youtube.com"
 
 SUPPORTED_BROWSERS = [
     "chrome",
@@ -20,14 +29,59 @@ SUPPORTED_BROWSERS = [
 ]
 
 
+def detect_browser_profiles() -> List[Dict[str, str]]:
+    """Detect available Google/browser accounts across installed browsers."""
+    browser_dirs = {
+        "chrome": Path.home() / ".config" / "google-chrome",
+        "chromium": Path.home() / ".config" / "chromium",
+        "brave": Path.home() / ".config" / "BraveSoftware" / "Brave-Browser",
+        "edge": Path.home() / ".config" / "microsoft-edge",
+    }
+
+    profiles: List[Dict[str, str]] = []
+
+    for b_name, b_dir in browser_dirs.items():
+        local_state = b_dir / "Local State"
+        if local_state.exists():
+            try:
+                with open(local_state, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                info = data.get("profile", {}).get("info_cache", {})
+                for key, val in info.items():
+                    name = val.get("name", "Profile")
+                    email = val.get("user_name", "")
+                    profiles.append(
+                        {
+                            "browser": b_name,
+                            "profile_key": key,
+                            "name": name,
+                            "email": email or "(No email specified)",
+                        }
+                    )
+            except Exception:
+                pass
+
+    return profiles
+
+
+def get_browser_specifier() -> str:
+    """Return browser:profile string for yt-dlp/mpv."""
+    cfg = load_config()
+    browser = cfg.get("browser", "chrome")
+    profile = cfg.get("profile", "")
+    if profile:
+        return f"{browser}:{profile}"
+    return browser
+
+
 def get_ytdl_auth_args() -> List[str]:
     """Return command line arguments for yt-dlp based on current authentication mode."""
     cfg = load_config()
     mode = cfg.get("auth_mode", "none")
 
     if mode == "browser":
-        browser = cfg.get("browser", "chrome")
-        return ["--cookies-from-browser", browser]
+        spec = get_browser_specifier()
+        return ["--cookies-from-browser", spec]
     elif mode == "cookies_file":
         cfile = cfg.get("cookies_file", str(COOKIES_FILE))
         if os.path.isfile(cfile):
@@ -41,8 +95,8 @@ def get_mpv_auth_args() -> List[str]:
     mode = cfg.get("auth_mode", "none")
 
     if mode == "browser":
-        browser = cfg.get("browser", "chrome")
-        return [f"--ytdl-raw-options-append=cookies-from-browser={browser}"]
+        spec = get_browser_specifier()
+        return [f"--ytdl-raw-options-append=cookies-from-browser={spec}"]
     elif mode == "cookies_file":
         cfile = cfg.get("cookies_file", str(COOKIES_FILE))
         if os.path.isfile(cfile):
@@ -50,40 +104,8 @@ def get_mpv_auth_args() -> List[str]:
     return []
 
 
-def test_auth_options(auth_args: List[str]) -> Tuple[bool, str]:
-    """Test whether authentication options work with YouTube."""
-    yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
-    cmd = [
-        yt_dlp,
-        *auth_args,
-        "--simulate",
-        "--no-warnings",
-        "--print",
-        "title",
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    ]
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if proc.returncode == 0:
-            return True, "Authentication verified successfully!"
-        err = proc.stderr.strip()
-        if "could not find" in err.lower() or "database is locked" in err.lower():
-            return False, f"Could not read browser cookies: {err}"
-        return False, f"Verification failed: {err}"
-    except subprocess.TimeoutExpired:
-        return False, "Verification timed out connecting to YouTube."
-    except Exception as e:
-        return False, f"Error running verification: {e}"
-
-
-def login_browser(browser_name: str) -> Tuple[bool, str]:
-    """Set authentication via browser cookie extraction."""
+def set_browser_login(browser_name: str, profile_key: str = "", email: str = "") -> Tuple[bool, str]:
+    """Set authentication via browser and optional profile."""
     b_clean = browser_name.lower().strip()
     if b_clean not in SUPPORTED_BROWSERS:
         return (
@@ -91,19 +113,14 @@ def login_browser(browser_name: str) -> Tuple[bool, str]:
             f"Unsupported browser '{browser_name}'. Supported: {', '.join(SUPPORTED_BROWSERS)}",
         )
 
-    auth_args = ["--cookies-from-browser", b_clean]
-    ok, msg = test_auth_options(auth_args)
-    if not ok:
-        # Check if browser is running or cookies locked
-        return False, (
-            f"Failed to extract cookies from {b_clean}.\n"
-            f"Details: {msg}\n"
-            f"Tip: If {b_clean} is currently open, try closing it or use an exported cookies.txt file."
-        )
-
     set_config_val("auth_mode", "browser")
     set_config_val("browser", b_clean)
-    return True, f"Successfully authenticated with {b_clean} cookies! YouTube Premium ads will be skipped."
+    set_config_val("profile", profile_key)
+    set_config_val("account_email", email)
+
+    display_acc = f" ({email})" if email else ""
+    display_prof = f" [{profile_key}]" if profile_key else ""
+    return True, f"Successfully connected to {b_clean.capitalize()}{display_prof}{display_acc}!"
 
 
 def login_cookies_file(cookies_path: str) -> Tuple[bool, str]:
@@ -113,26 +130,23 @@ def login_cookies_file(cookies_path: str) -> Tuple[bool, str]:
         return False, f"Cookies file not found at: {src}"
 
     try:
-        # Copy to config dir
         dest = COOKIES_FILE
         shutil.copyfile(src, dest)
-        dest.chmod(0o600)  # Secure permission
+        dest.chmod(0o600)
     except Exception as e:
         return False, f"Failed to copy cookies file: {e}"
 
-    auth_args = ["--cookies", str(dest)]
-    ok, msg = test_auth_options(auth_args)
-    if not ok:
-        return False, f"Cookies file verification failed: {msg}"
-
     set_config_val("auth_mode", "cookies_file")
     set_config_val("cookies_file", str(dest))
+    set_config_val("account_email", "cookies.txt session")
     return True, "Successfully loaded cookies.txt! YouTube Premium ads will be skipped."
 
 
 def logout() -> Tuple[bool, str]:
     """Log out and revert to standard guest mode."""
     set_config_val("auth_mode", "none")
+    set_config_val("profile", "")
+    set_config_val("account_email", "")
     if COOKIES_FILE.exists():
         try:
             COOKIES_FILE.unlink()
@@ -148,23 +162,149 @@ def get_auth_status() -> Dict[str, str]:
 
     if mode == "browser":
         browser = cfg.get("browser", "chrome")
+        profile = cfg.get("profile", "")
+        email = cfg.get("account_email", "")
+        desc = f"Authenticated via {browser.capitalize()}"
+        if profile:
+            desc += f" (Profile: {profile})"
+        if email:
+            desc += f" - {email}"
+
         return {
             "mode": "browser",
             "browser": browser,
-            "description": f"Authenticated via {browser.capitalize()} browser cookies",
-            "ad_free": "Yes (Premium active if your account is subscribed)",
+            "profile": profile or "Default",
+            "email": email or "(Not recorded)",
+            "description": desc,
+            "ad_free": "Yes (Ad-Free / YouTube Premium active if account subscribed)",
         }
     elif mode == "cookies_file":
         cfile = cfg.get("cookies_file", str(COOKIES_FILE))
         return {
             "mode": "cookies_file",
             "file": cfile,
+            "email": "cookies.txt",
             "description": f"Authenticated via cookies file ({cfile})",
-            "ad_free": "Yes (Premium active if your account is subscribed)",
+            "ad_free": "Yes (Ad-Free / YouTube Premium active if account subscribed)",
         }
     else:
         return {
             "mode": "none",
+            "email": "(None)",
             "description": "Guest / Standard mode (no account logged in)",
             "ad_free": "No (Standard public playback)",
         }
+
+
+def open_login_hyperlink() -> bool:
+    """Open the Google Account Chooser link in default web browser."""
+    try:
+        webbrowser.open(GOOGLE_LOGIN_URL)
+        return True
+    except Exception:
+        return False
+
+
+def run_interactive_login() -> None:
+    """Interactive login workflow featuring hyperlink and multi-account selection."""
+    profiles = detect_browser_profiles()
+
+    table = Table(
+        title="[bold cyan]Detected Google Accounts (from installed browsers)[/bold cyan]",
+        border_style="cyan",
+        show_lines=False,
+    )
+    table.add_column("#", style="bold yellow", width=4, justify="right")
+    table.add_column("Account / Email", style="bold white", min_width=28)
+    table.add_column("Profile Name", style="cyan", min_width=18)
+    table.add_column("Browser", style="dim", min_width=10)
+
+    for idx, p in enumerate(profiles, 1):
+        table.add_row(
+            str(idx),
+            p["email"],
+            p["name"],
+            f"{p['browser'].capitalize()} ({p['profile_key']})",
+        )
+
+    link_markup = f"[link={GOOGLE_LOGIN_URL}][bold underline bright_blue]{GOOGLE_LOGIN_URL}[/bold underline bright_blue][/link]"
+
+    login_panel = Panel(
+        f"[bold white]1. Click the login link below (or press [bold green]'o'[/bold green] to open it in your browser):[/bold white]\n"
+        f"   🔗 {link_markup}\n\n"
+        f"[dim]Google will present your Google accounts. Sign in or pick the account that has YouTube Music / Premium.[/dim]\n\n"
+        f"[bold white]2. Then select which Google account below to use for Music CLI:[/bold white]",
+        title="[bold bright_green]YouTube Music Login[/bold bright_green]",
+        border_style="bright_blue",
+    )
+
+    console.print()
+    console.print(login_panel)
+    console.print()
+
+    if profiles:
+        console.print(table)
+        console.print()
+
+    console.print("[bold cyan]Commands:[/bold cyan]")
+    if profiles:
+        console.print(f"  [bold yellow]1-{len(profiles)}[/bold yellow] : Select an account from the list above")
+    console.print("  [bold green]o[/bold green]   : Open the Google Account Chooser link in your web browser")
+    console.print("  [bold green]c[/bold green]   : Import cookies from a cookies.txt file")
+    console.print("  [bold green]s[/bold green]   : View current authentication status")
+    console.print("  [bold red]q[/bold red]   : Cancel / Exit")
+    console.print()
+
+    while True:
+        try:
+            choice = input("Enter choice: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Login cancelled.[/yellow]")
+            return
+
+        if not choice or choice in ("q", "quit", "exit"):
+            console.print("[yellow]Login cancelled.[/yellow]")
+            return
+
+        if choice in ("o", "open"):
+            console.print("[cyan]Opening Google Account Chooser in your browser...[/cyan]")
+            open_login_hyperlink()
+            console.print(f"[dim]Link opened: {GOOGLE_LOGIN_URL}[/dim]")
+            console.print("[dim]After signing in or selecting your account, choose its number from the list above:[/dim]")
+            continue
+
+        if choice in ("s", "status"):
+            st = get_auth_status()
+            console.print(f"[green]Current status:[/green] {st['description']}")
+            continue
+
+        if choice in ("c", "cookies"):
+            path = input("Enter path to cookies.txt: ").strip()
+            if path:
+                ok, msg = login_cookies_file(path)
+                if ok:
+                    console.print(f"[bold green]✓ {msg}[/bold green]")
+                else:
+                    console.print(f"[bold red]✗ {msg}[/bold red]")
+                return
+
+        # Check numeric selection
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(profiles):
+                selected = profiles[idx - 1]
+                ok, msg = set_browser_login(
+                    browser_name=selected["browser"],
+                    profile_key=selected["profile_key"],
+                    email=selected["email"],
+                )
+                if ok:
+                    console.print(f"\n[bold green]✓ {msg}[/bold green]")
+                    console.print("[dim]YouTube Music will now stream using this account session.[/dim]\n")
+                else:
+                    console.print(f"\n[bold red]✗ {msg}[/bold red]\n")
+                return
+        except ValueError:
+            pass
+
+        console.print("[yellow]Invalid choice. Please choose an account number, 'o' to open browser, or 'q' to quit.[/yellow]")

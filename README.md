@@ -72,32 +72,34 @@ While a track is playing in your terminal:
 
 By default, `music-cli` runs in **Guest / Standard Mode** (no login needed).
 
-If you have a YouTube Premium account, you can enable ad-free playback using either of the following methods:
+If you have a YouTube Music / YouTube Premium subscription across multiple Google accounts, you can authenticate via an interactive hyperlink:
 
-### Option A: Extract from your browser (Recommended)
+### 1. Interactive Hyperlink & Multi-Account Login
 
-Extract session cookies directly from your installed browser:
-
+Simply run:
 ```bash
-# Supported browsers: chrome, firefox, brave, edge, chromium, opera, vivaldi
-music login --browser chrome
+music login
+```
+This displays:
+1. **Clickable Hyperlink**:
+   `https://accounts.google.com/AccountChooser?continue=https://music.youtube.com`
+2. **Account Switcher**: An interactive numbered list of all Google accounts detected on your machine (e.g. `ghiffarsabda@gmail.com`, work emails, etc.).
+3. **One-key actions**:
+   - Type `1-N` to immediately link that account.
+   - Type `o` to open the Google Account Chooser link in your browser.
+   - Type `c` to import an exported `cookies.txt` file.
+
+You can also open the browser directly from the command:
+```bash
+music login --open
 ```
 
-### Option B: Import `cookies.txt`
-
-If you use a browser extension (such as *Get cookies.txt LOCALLY*), export your cookies to a file and import it:
-
-```bash
-music login --cookies ~/Downloads/youtube.com_cookies.txt
-```
-
-### Manage Authentication
-
+### 2. Manage Authentication
 - **Check login status**:
   ```bash
   music login --status
   ```
-- **Log out (return to guest mode)**:
+- **Log out (return to standard guest mode)**:
   ```bash
   music login --logout
   ```

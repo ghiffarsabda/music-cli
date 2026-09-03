@@ -8,11 +8,14 @@ from rich.console import Console
 from rich.table import Table
 
 from music.auth import (
+    GOOGLE_LOGIN_URL,
     SUPPORTED_BROWSERS,
     get_auth_status,
-    login_browser,
     login_cookies_file,
     logout,
+    open_login_hyperlink,
+    run_interactive_login,
+    set_browser_login,
 )
 from music.config import get_config_val, load_config, set_config_val
 from music.history import clear_history, get_history
@@ -61,9 +64,12 @@ def handle_login(args: argparse.Namespace) -> None:
 
         table.add_row("Mode", status["mode"].capitalize())
         table.add_row("Status", status["description"])
+        table.add_row("Account", status.get("email", "(None)"))
         table.add_row("Ad-Free Playback", status["ad_free"])
         if "browser" in status:
             table.add_row("Browser", status["browser"].capitalize())
+        if "profile" in status and status["profile"]:
+            table.add_row("Profile", status["profile"])
         if "file" in status:
             table.add_row("Cookies File", status["file"])
         console.print(table)
@@ -74,13 +80,9 @@ def handle_login(args: argparse.Namespace) -> None:
         console.print(f"[yellow]{msg}[/yellow]")
         return
 
-    if args.browser:
-        console.print(f"[cyan]Extracting session cookies from {args.browser}...[/cyan]")
-        ok, msg = login_browser(args.browser)
-        if ok:
-            console.print(f"[bold green]✓ {msg}[/bold green]")
-        else:
-            console.print(f"[bold red]✗ {msg}[/bold red]")
+    if getattr(args, "open", False):
+        console.print("[cyan]Opening Google Account Chooser in browser...[/cyan]")
+        open_login_hyperlink()
         return
 
     if args.cookies:
@@ -92,21 +94,8 @@ def handle_login(args: argparse.Namespace) -> None:
             console.print(f"[bold red]✗ {msg}[/bold red]")
         return
 
-    # If no flags passed to login, show interactive guide
-    console.print("[bold cyan]YouTube Music Account Login[/bold cyan]")
-    console.print(
-        "Logging in allows you to use your YouTube Music / Premium account to skip ads and access full library."
-    )
-    console.print()
-    console.print("Options:")
-    console.print(f"  [bold green]1.[/bold green] Extract cookies from browser:")
-    console.print(f"     [dim]music login --browser chrome[/dim]  (Supported: {', '.join(SUPPORTED_BROWSERS)})")
-    console.print("  [bold green]2.[/bold green] Use an exported cookies.txt file:")
-    console.print("     [dim]music login --cookies ~/Downloads/cookies.txt[/dim]")
-    console.print("  [bold green]3.[/bold green] Check current status:")
-    console.print("     [dim]music login --status[/dim]")
-    console.print("  [bold green]4.[/bold green] Log out (guest mode):")
-    console.print("     [dim]music login --logout[/dim]")
+    # Run interactive login with hyperlink and account chooser
+    run_interactive_login()
 
 
 def handle_history(args: argparse.Namespace) -> None:
@@ -204,7 +193,8 @@ Examples:
   music "Bohemian Rhapsody" -s             # Show search results list to pick from
   music search "Daft Punk"                 # Interactive search menu
   music url "https://music.youtube.com/..." # Stream direct URL
-  music login --browser chrome             # Authenticate with Chrome for YouTube Premium (no ads)
+  music login                              # Interactive login (hyperlink & account selector)
+  music login --open                       # Open Google Account Chooser in browser
   music login --cookies cookies.txt        # Authenticate with cookies.txt
   music login --status                     # Check current login status
   music history                            # View and replay recently played songs
@@ -226,6 +216,7 @@ Examples:
 
     # login subcommand
     p_login = subparsers.add_parser("login", help="Configure YouTube authentication (skip ads)")
+    p_login.add_argument("--open", action="store_true", help="Open Google login link directly in browser")
     p_login.add_argument("--browser", choices=SUPPORTED_BROWSERS, help="Extract cookies from browser")
     p_login.add_argument("--cookies", help="Path to Netscape cookies.txt file")
     p_login.add_argument("--status", action="store_true", help="Show current authentication status")

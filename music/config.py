@@ -28,6 +28,8 @@ def detect_executable(name: str, fallback_paths: list[str] | None = None) -> str
 DEFAULT_CONFIG: Dict[str, Any] = {
     "auth_mode": "none",  # 'none', 'browser', 'cookies_file'
     "browser": "chrome",  # 'chrome', 'firefox', 'brave', 'edge', etc.
+    "profile": "",  # profile key e.g. 'Default', 'Profile 1'
+    "account_email": "",
     "cookies_file": str(COOKIES_FILE),
     "volume": 80,
     "audio_quality": "best",  # 'best', 'high', 'medium'
