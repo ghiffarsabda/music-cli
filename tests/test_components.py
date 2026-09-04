@@ -1,5 +1,11 @@
 """Unit and integration tests for music-cli."""
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 import time
 from music.config import load_config, set_config_val
 from music.search import search_music, format_duration, parse_duration_str, SongItem

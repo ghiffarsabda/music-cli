@@ -13,6 +13,11 @@ import sys
 import tempfile
 import time
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 from music.config import LIBRARY_DB
 import music.history as history_mod
 from music.history import (

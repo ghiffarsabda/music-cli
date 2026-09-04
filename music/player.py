@@ -16,14 +16,43 @@ from music.auth import get_mpv_auth_args
 from music.config import get_config_val
 
 
+if sys.platform == "win32":
+    class _WinNamedPipeSocket:
+        """Emulates socket interface over a Windows named pipe."""
+
+        def __init__(self, handle):
+            import msvcrt
+            import io
+            self._handle = handle
+            self._fd = msvcrt.open_osfhandle(handle, os.O_RDWR)
+            self._stream = io.open(self._fd, "r+b", buffering=0)
+
+        def sendall(self, data: bytes):
+            self._stream.write(data)
+            self._stream.flush()
+
+        def makefile(self, mode="r", encoding="utf-8"):
+            import io
+            return io.TextIOWrapper(self._stream, encoding=encoding, newline="")
+
+        def close(self):
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+
+
 class MpvPlayer:
-    """Controls an mpv instance running in background via Unix domain socket IPC."""
+    """Controls an mpv instance running in background via Unix domain socket or Windows named pipe IPC."""
 
     def __init__(self, initial_volume: int = 100):
         self.initial_volume = initial_volume
-        self.sock_path = os.path.join(tempfile.gettempdir(), f"music_cli_{os.getpid()}_{id(self)}.sock")
+        if sys.platform == "win32":
+            self.sock_path = f"\\\\.\\pipe\\music_cli_{os.getpid()}_{id(self)}"
+        else:
+            self.sock_path = os.path.join(tempfile.gettempdir(), f"music_cli_{os.getpid()}_{id(self)}.sock")
         self.process: Optional[subprocess.Popen] = None
-        self.sock: Optional[socket.socket] = None
+        self.sock: Optional[Any] = None
         self._lock = threading.Lock()
         self._is_running = False
         self._cached_duration: float = 0.0
@@ -39,7 +68,7 @@ class MpvPlayer:
         if self._is_running:
             return True
 
-        if os.path.exists(self.sock_path):
+        if sys.platform != "win32" and os.path.exists(self.sock_path):
             try:
                 os.remove(self.sock_path)
             except OSError:
@@ -99,21 +128,42 @@ class MpvPlayer:
 
         self.process = subprocess.Popen(cmd, **popen_kwargs)
 
-        # Wait for socket to become available
+        # Wait for socket or named pipe to become available
         connected = False
-        for _ in range(40):
-            if os.path.exists(self.sock_path):
+        if sys.platform == "win32":
+            import _winapi
+            for _ in range(40):
                 try:
-                    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                    s.settimeout(1.5)
-                    s.connect(self.sock_path)
+                    handle = _winapi.CreateFile(
+                        self.sock_path,
+                        _winapi.GENERIC_READ | _winapi.GENERIC_WRITE,
+                        0,
+                        0,
+                        _winapi.OPEN_EXISTING,
+                        0,
+                        0
+                    )
+                    s = _WinNamedPipeSocket(handle)
                     self.sock = s
                     self._sock_file = s.makefile("r", encoding="utf-8")
                     connected = True
                     break
-                except (socket.error, OSError):
+                except OSError:
                     time.sleep(0.05)
-            time.sleep(0.05)
+        else:
+            for _ in range(40):
+                if os.path.exists(self.sock_path):
+                    try:
+                        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                        s.settimeout(1.5)
+                        s.connect(self.sock_path)
+                        self.sock = s
+                        self._sock_file = s.makefile("r", encoding="utf-8")
+                        connected = True
+                        break
+                    except (socket.error, OSError):
+                        time.sleep(0.05)
+                time.sleep(0.05)
 
         if not connected:
             self.stop()
@@ -327,7 +377,7 @@ class MpvPlayer:
                     pass
             self.process = None
 
-        if os.path.exists(self.sock_path):
+        if sys.platform != "win32" and os.path.exists(self.sock_path):
             try:
                 os.remove(self.sock_path)
             except OSError:
