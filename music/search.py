@@ -8,7 +8,12 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from music.config import get_config_val
+from music.config import (
+    find_node_bin,
+    find_ytdl_bin,
+    get_config_val,
+    get_ytdl_cmd_prefix,
+)
 
 
 @dataclass
@@ -165,12 +170,12 @@ def extract_video_id_from_url(url_or_id: str) -> str:
 
 def resolve_direct_item(url_or_id: str) -> Optional[SongItem]:
     """Resolve metadata for a direct YouTube URL or video ID using yt-dlp."""
-    yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+    base_cmd = get_ytdl_cmd_prefix()
     vid = extract_video_id_from_url(url_or_id)
     url = f"https://www.youtube.com/watch?v={vid}"
 
     cmd = [
-        yt_dlp,
+        *base_cmd,
         "--dump-single-json",
         "--skip-download",
         "--no-warnings",
@@ -405,9 +410,9 @@ def get_playlist_tracks(
 
     # Attempt 2: Fallback to yt-dlp
     try:
-        yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+        base_cmd = get_ytdl_cmd_prefix()
         playlist_url = f"https://www.youtube.com/playlist?list={pid}"
-        cmd = [yt_dlp, "--flat-playlist", "-J", "--skip-download", playlist_url]
+        cmd = [*base_cmd, "--flat-playlist", "-J", "--skip-download", playlist_url]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if proc.returncode == 0:
             data = json.loads(proc.stdout)
@@ -563,9 +568,9 @@ def get_album_tracks(browse_id: str, limit: int = 100) -> Tuple[Optional[AlbumIt
 
 def search_ytdlp_fallback(query: str, limit: int = 5) -> List[SongItem]:
     """Fallback search using yt-dlp flat playlist extraction."""
-    yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+    base_cmd = get_ytdl_cmd_prefix()
     cmd = [
-        yt_dlp,
+        *base_cmd,
         f"ytsearch{limit}:{query}",
         "--dump-single-json",
         "--flat-playlist",
@@ -654,8 +659,8 @@ class StreamPrewarmer:
 
         def _worker(vid: str):
             try:
-                yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
-                cmd = [yt_dlp, "-f", "ba/b", "-g", "--no-warnings", f"https://www.youtube.com/watch?v={vid}"]
+                base_cmd = get_ytdl_cmd_prefix()
+                cmd = [*base_cmd, "-f", "ba/b", "-g", "--no-warnings", f"https://www.youtube.com/watch?v={vid}"]
                 proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 with self._lock:
                     if self._active_vid != vid:
@@ -711,12 +716,12 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
     if cached_url:
         return cached_url
 
-    yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
+    base_cmd = get_ytdl_cmd_prefix()
     target_url = f"https://www.youtube.com/watch?v={vid}"
 
-    # Fast direct extraction (clean stream avoids GVS PO token delay and starts in seconds)
+    # 1. Fast direct extraction (clean stream avoids GVS PO token delay and starts in seconds)
     cmd = [
-        yt_dlp,
+        *base_cmd,
         "-f", "ba/b",
         "-g",
         "--no-warnings",
@@ -733,14 +738,33 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
     except Exception:
         pass
 
-    # If fast extraction failed (e.g. member-only or private track), try with cookies
+    # 2. Resilient fallback using mobile/web extractor client (bypasses PO-token challenges)
+    cmd_alt = [
+        *base_cmd,
+        "--extractor-args", "youtube:player_client=android,web",
+        "-f", "ba/b",
+        "-g",
+        "--no-warnings",
+        target_url,
+    ]
+    try:
+        proc = subprocess.run(cmd_alt, capture_output=True, text=True, timeout=12)
+        if proc.returncode == 0:
+            lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
+            if lines:
+                set_cached_stream_url(vid, lines[-1])
+                return lines[-1]
+    except Exception:
+        pass
+
+    # 3. If fast extraction failed (e.g. member-only or private track), try with cookies
     from music.auth import get_ytdl_auth_args
 
     auth_args = get_ytdl_auth_args()
     if auth_args:
-        node_bin = get_config_val("node_path", "")
+        node_bin = find_node_bin()
         cmd_auth = [
-            yt_dlp,
+            *base_cmd,
             *auth_args,
             "-f", "ba/b",
             "-g",
@@ -755,7 +779,7 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
             if proc.returncode == 0:
                 lines = [l.strip() for l in proc.stdout.splitlines() if l.strip().startswith("http")]
                 if lines:
-                    _STREAM_URL_CACHE[vid] = lines[-1]
+                    set_cached_stream_url(vid, lines[-1])
                     return lines[-1]
         except Exception:
             pass

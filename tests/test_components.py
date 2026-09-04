@@ -427,6 +427,23 @@ def test_prebuffering_queue_sync():
     print("✓ Prebuffering queue synchronization test passed")
 
 
+def test_stream_url_and_exec_discovery():
+    """Verify robust yt-dlp discovery and stream URL resolution."""
+    from music.config import find_ytdl_bin, get_ytdl_cmd_prefix
+    from music.search import resolve_audio_stream_url
+
+    ytdl_bin = find_ytdl_bin()
+    assert ytdl_bin, "find_ytdl_bin must return a non-empty string"
+
+    cmd_prefix = get_ytdl_cmd_prefix()
+    assert isinstance(cmd_prefix, list) and len(cmd_prefix) >= 1
+    assert "yt" in cmd_prefix[0] or "python" in cmd_prefix[0]
+
+    stream_url = resolve_audio_stream_url("dQw4w9WgXcQ")
+    assert stream_url.startswith("http"), f"Expected HTTP stream URL, got: {stream_url}"
+    print(f"✓ Stream URL and executable discovery tests passed")
+
+
 if __name__ == "__main__":
     test_duration_helpers()
     test_history()
@@ -444,4 +461,5 @@ if __name__ == "__main__":
     test_render_player_panel()
     test_queue_manager()
     test_prebuffering_queue_sync()
+    test_stream_url_and_exec_discovery()
     print("\n🎉 ALL TESTS PASSED!")

@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from music.auth import get_mpv_auth_args
-from music.config import get_config_val
+from music.config import CONFIG_DIR, find_node_bin, find_ytdl_bin, get_config_val
 
 
 if sys.platform == "win32":
@@ -80,35 +80,55 @@ class MpvPlayer:
                 r"C:\ProgramData\chocolatey\bin\mpv.exe",
                 r"C:\ProgramData\chocolatey\lib\mpvio.install\tools\mpv.exe",
                 r"C:\ProgramData\chocolatey\lib\mpv\tools\mpv.exe",
+                r"C:\mpv\mpv.exe",
                 r"C:\tools\mpv\mpv.exe",
+                os.path.expandvars(r"%LOCALAPPDATA%\mpv\mpv.exe"),
                 os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpv.exe"),
                 os.path.expandvars(r"%LOCALAPPDATA%\Programs\mpv\mpv.exe"),
                 os.path.expandvars(r"%ProgramFiles%\mpv\mpv.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\mpv\mpv.exe"),
+                os.path.expandvars(r"%USERPROFILE%\scoop\apps\mpv\current\mpv.exe"),
+                r"C:\scoop\apps\mpv\current\mpv.exe",
             ]
             for p in common_mpv_paths:
                 if os.path.exists(p):
                     mpv_bin = p
                     break
+            winget_pkgs = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages")
+            if not mpv_bin and os.path.exists(winget_pkgs):
+                for root, _, files in os.walk(winget_pkgs):
+                    if "mpv.exe" in files:
+                        mpv_bin = os.path.join(root, "mpv.exe")
+                        break
             if not mpv_bin and os.path.exists(r"C:\ProgramData\chocolatey"):
                 for root, _, files in os.walk(r"C:\ProgramData\chocolatey"):
                     if "mpv.exe" in files:
                         mpv_bin = os.path.join(root, "mpv.exe")
                         break
+        elif not mpv_bin and sys.platform == "darwin":
+            common_mac_paths = [
+                "/opt/homebrew/bin/mpv",
+                "/usr/local/bin/mpv",
+                os.path.expanduser("~/.local/bin/mpv"),
+            ]
+            for p in common_mac_paths:
+                if os.path.exists(p):
+                    mpv_bin = p
+                    break
 
         if not mpv_bin:
             raise RuntimeError("mpv executable not found. Please ensure mpv is installed.")
 
-        yt_dlp_bin = get_config_val("yt_dlp_path", shutil.which("yt-dlp") or "yt-dlp")
-        node_bin = get_config_val("node_path", shutil.which("node") or "")
-        js_runtime_opt = f"js-runtimes=node:{node_bin}" if node_bin else ""
+        yt_dlp_bin = find_ytdl_bin()
+        yt_dlp_arg = yt_dlp_bin.replace("\\", "/") if sys.platform == "win32" else yt_dlp_bin
+        node_bin = find_node_bin()
         cmd = [
             mpv_bin,
             "--no-video",
             "--idle=yes",
             f"--input-ipc-server={self.sock_path}",
             f"--volume={self.initial_volume}",
-            f"--script-opts=ytdl_hook-ytdl_path={yt_dlp_bin}",
-            "--ytdl-raw-options-append=remote-components=ejs:github",
+            f"--script-opts=ytdl_hook-ytdl_path={yt_dlp_arg}",
             "--ytdl-format=bestaudio/best",
             "--gapless-audio=yes",
             "--prefetch-playlist=yes",
@@ -116,10 +136,13 @@ class MpvPlayer:
             "--force-window=no",
             "--terminal=no",
             "--msg-level=all=no",
+            f"--log-file={os.path.join(CONFIG_DIR, 'mpv.log')}",
         ]
 
-        if js_runtime_opt:
-            cmd.append(f"--ytdl-raw-options-append={js_runtime_opt}")
+        if node_bin:
+            node_arg = node_bin.replace("\\", "/") if sys.platform == "win32" else node_bin
+            cmd.append(f"--ytdl-raw-options-append=js-runtimes=node:{node_arg}")
+            cmd.append("--ytdl-raw-options-append=remote-components=ejs:github")
 
         # Add auth cookies/options for mpv
         for opt in get_mpv_auth_args():

@@ -91,9 +91,14 @@ echo -e "${CYAN}→ Installing music-cli and dependencies...${RESET}"
 "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip --quiet
 "${INSTALL_DIR}/venv/bin/pip" install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
 
-# 5. Create symlink to ~/.local/bin/music
+# 5. Create symlinks in ~/.local/bin
 ln -sf "${INSTALL_DIR}/venv/bin/music" "${BIN_DIR}/music"
 chmod +x "${BIN_DIR}/music"
+
+if [ -f "${INSTALL_DIR}/venv/bin/yt-dlp" ]; then
+    ln -sf "${INSTALL_DIR}/venv/bin/yt-dlp" "${BIN_DIR}/yt-dlp"
+    chmod +x "${BIN_DIR}/yt-dlp"
+fi
 
 echo -e "${GREEN}✓${RESET} Created executable at ${BOLD}${BIN_DIR}/music${RESET}"
 

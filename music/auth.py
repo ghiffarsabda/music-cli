@@ -12,7 +12,14 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from music.config import COOKIES_FILE, get_config_val, load_config, set_config_val
+from music.config import (
+    COOKIES_FILE,
+    find_node_bin,
+    get_config_val,
+    get_ytdl_cmd_prefix,
+    load_config,
+    set_config_val,
+)
 
 console = Console()
 
@@ -106,16 +113,12 @@ def get_mpv_auth_args() -> List[str]:
 
 def export_browser_cookies(browser_name: str, profile_key: str = "") -> bool:
     """Export browser cookies once into cookies.txt for fast, lock-free streaming."""
-    yt_dlp = get_config_val("yt_dlp_path", "yt-dlp")
-    node_bin = get_config_val("node_path", "node")
+    base_cmd = get_ytdl_cmd_prefix()
+    node_bin = find_node_bin()
     spec = f"{browser_name}:{profile_key}" if profile_key else browser_name
 
     cmd = [
-        yt_dlp,
-        "--js-runtimes",
-        f"node:{node_bin}",
-        "--remote-components",
-        "ejs:github",
+        *base_cmd,
         "--cookies-from-browser",
         spec,
         "--cookies",
@@ -124,6 +127,9 @@ def export_browser_cookies(browser_name: str, profile_key: str = "") -> bool:
         "--no-warnings",
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
     ]
+    if node_bin:
+        cmd.extend(["--js-runtimes", f"node:{node_bin}", "--remote-components", "ejs:github"])
+
     try:
         proc = subprocess.run(cmd, capture_output=True, timeout=25)
         return proc.returncode == 0 and COOKIES_FILE.exists() and COOKIES_FILE.stat().st_size > 0

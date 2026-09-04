@@ -125,6 +125,23 @@ Write-Host "✓ Python $pyVer ready" -ForegroundColor Green
 # 2. Detect or Automatically Install mpv
 $mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
 if (-not $mpvCmd) {
+    $mpvCandidates = @(
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe",
+        "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
+        "$env:ProgramFiles\mpv\mpv.exe",
+        "C:\ProgramData\chocolatey\bin\mpv.exe",
+        "C:\mpv\mpv.exe",
+        "C:\tools\mpv\mpv.exe"
+    )
+    foreach ($cand in $mpvCandidates) {
+        if (Test-Path $cand) {
+            $mpvCmd = $cand
+            break
+        }
+    }
+}
+
+if (-not $mpvCmd) {
     Write-Host "🎵 Setting up audio player..." -ForegroundColor Magenta
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         try {
@@ -132,6 +149,19 @@ if (-not $mpvCmd) {
         } catch {}
         Refresh-EnvPath
         $mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
+        if (-not $mpvCmd) {
+            $mpvCandidates = @(
+                "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe",
+                "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
+                "$env:ProgramFiles\mpv\mpv.exe"
+            )
+            foreach ($cand in $mpvCandidates) {
+                if (Test-Path $cand) {
+                    $mpvCmd = $cand
+                    break
+                }
+            }
+        }
     }
     if ($mpvCmd) {
         Write-Host "✓ Audio player ready" -ForegroundColor Green
@@ -161,6 +191,8 @@ $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTa
 if ($userPath -notlike "*$scriptsDir*") {
     $newPath = "$scriptsDir;$userPath"
     [Environment]::SetEnvironmentVariable("Path", $newPath, [EnvironmentVariableTarget]::User)
+}
+if ($env:Path -notlike "*$scriptsDir*") {
     $env:Path = "$scriptsDir;$env:Path"
 }
 
