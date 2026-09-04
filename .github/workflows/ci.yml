@@ -1,0 +1,64 @@
+name: Cross-Platform CI & Installer Test
+
+on:
+  push:
+    branches: [ main, music-pretty ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-installer-and-app:
+    name: ${{ matrix.os }} (Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mpv
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install mpv
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install mpv -y
+
+      - name: Test One-line Installer (Linux & macOS)
+        if: runner.os != 'Windows'
+        run: |
+          bash install.sh
+          export PATH="$HOME/.local/bin:$PATH"
+          music --help
+
+      - name: Test One-line Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\install.ps1
+          $env:Path = "$env:LOCALAPPDATA\music-cli\venv\Scripts;$env:Path"
+          music --help
+
+      - name: Run Test Suites
+        shell: bash
+        run: |
+          pip install -e .
+          python tests/test_components.py
+          python tests/test_local_perf.py

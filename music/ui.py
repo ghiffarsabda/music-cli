@@ -1,13 +1,25 @@
 """Terminal User Interface for music-cli using Rich."""
 
 import os
-import select
 import sys
-import termios
 import threading
 import time
-import tty
 from typing import Dict, List, Optional, Set, Tuple
+
+try:
+    import termios
+    import tty
+    import select
+    HAS_TERMIOS = True
+except ImportError:
+    termios = None
+    tty = None
+    select = None
+    HAS_TERMIOS = False
+    try:
+        import msvcrt
+    except ImportError:
+        msvcrt = None
 
 from rich import box
 from rich.align import Align
@@ -151,14 +163,14 @@ def prompt_album_selection(albums: List[AlbumItem]) -> Optional[AlbumItem]:
 
 
 class KeyReader:
-    """Non-blocking keyboard reader with support for arrows, space, and escape keys on Linux."""
+    """Non-blocking keyboard reader with cross-platform support for Linux, macOS, and Windows."""
 
     def __init__(self):
         self.old_settings = None
         self.fd: Optional[int] = None
 
     def __enter__(self):
-        if sys.stdin.isatty():
+        if HAS_TERMIOS and sys.stdin.isatty():
             try:
                 self.fd = sys.stdin.fileno()
                 self.old_settings = termios.tcgetattr(self.fd)
@@ -169,62 +181,104 @@ class KeyReader:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.old_settings and self.fd is not None:
+        if HAS_TERMIOS and self.old_settings and self.fd is not None:
             try:
                 termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
             except Exception:
                 pass
 
     def get_key(self, timeout: float = 0.05) -> Optional[str]:
-        """Read a single keypress or key escape sequence within timeout using unbuffered os.read."""
-        if not sys.stdin.isatty() or self.fd is None:
-            time.sleep(timeout)
-            return None
-
-        rlist, _, _ = select.select([self.fd], [], [], timeout)
-        if not rlist:
-            return None
-
-        try:
-            raw = os.read(self.fd, 32)
-            if not raw:
+        """Read a single keypress or key escape sequence within timeout using unbuffered input."""
+        if HAS_TERMIOS:
+            if not sys.stdin.isatty() or self.fd is None:
+                time.sleep(timeout)
                 return None
 
-            # Escape sequences (Arrows, Home, End, Delete, Shift+Arrows)
-            if raw in (b"\x1b[1;2A", b"\x1b[1;3A", b"\x1b[1;5A", b"\x1b\x1b[A"):
-                return "shift_up"
-            elif raw in (b"\x1b[1;2B", b"\x1b[1;3B", b"\x1b[1;5B", b"\x1b\x1b[B"):
-                return "shift_down"
-            elif raw in (b"\x1b[A", b"\x1bOA"):
-                return "up"
-            elif raw in (b"\x1b[B", b"\x1bOB"):
-                return "down"
-            elif raw in (b"\x1b[C", b"\x1bOC"):
-                return "right"
-            elif raw in (b"\x1b[D", b"\x1bOD"):
-                return "left"
-            elif raw in (b"\x1b[H", b"\x1b[1~"):
-                return "home"
-            elif raw in (b"\x1b[F", b"\x1b[4~"):
-                return "end"
-            elif raw in (b"\x1b[3~",):
-                return "delete"
-            elif raw == b"\x1b":
-                return "escape"
-            elif raw == b"\x03":  # Ctrl-C
-                return "quit"
-            elif raw in (b"\r", b"\n"):
-                return "enter"
-            elif raw == b"\t":
-                return "tab"
-            elif raw in (b"\x7f", b"\x08"):
-                return "backspace"
-            elif raw == b"\x15":  # Ctrl-U
-                return "ctrl_u"
+            rlist, _, _ = select.select([self.fd], [], [], timeout)
+            if not rlist:
+                return None
 
-            # Decode normal printable UTF-8 character
-            return raw.decode("utf-8", errors="ignore")
-        except Exception:
+            try:
+                raw = os.read(self.fd, 32)
+                if not raw:
+                    return None
+
+                # Escape sequences (Arrows, Home, End, Delete, Shift+Arrows)
+                if raw in (b"\x1b[1;2A", b"\x1b[1;3A", b"\x1b[1;5A", b"\x1b\x1b[A"):
+                    return "shift_up"
+                elif raw in (b"\x1b[1;2B", b"\x1b[1;3B", b"\x1b[1;5B", b"\x1b\x1b[B"):
+                    return "shift_down"
+                elif raw in (b"\x1b[A", b"\x1bOA"):
+                    return "up"
+                elif raw in (b"\x1b[B", b"\x1bOB"):
+                    return "down"
+                elif raw in (b"\x1b[C", b"\x1bOC"):
+                    return "right"
+                elif raw in (b"\x1b[D", b"\x1bOD"):
+                    return "left"
+                elif raw in (b"\x1b[H", b"\x1b[1~"):
+                    return "home"
+                elif raw in (b"\x1b[F", b"\x1b[4~"):
+                    return "end"
+                elif raw in (b"\x1b[3~",):
+                    return "delete"
+                elif raw == b"\x1b":
+                    return "escape"
+                elif raw == b"\x03":  # Ctrl-C
+                    return "quit"
+                elif raw in (b"\r", b"\n"):
+                    return "enter"
+                elif raw == b"\t":
+                    return "tab"
+                elif raw in (b"\x7f", b"\x08"):
+                    return "backspace"
+                elif raw == b"\x15":  # Ctrl-U
+                    return "ctrl_u"
+
+                # Decode normal printable UTF-8 character
+                return raw.decode("utf-8", errors="ignore")
+            except Exception:
+                return None
+        elif msvcrt:
+            start_t = time.time()
+            while time.time() - start_t < timeout:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getch()
+                    if ch in (b"\x00", b"\xe0"):
+                        ch2 = msvcrt.getch()
+                        if ch2 == b"H":
+                            return "up"
+                        elif ch2 == b"P":
+                            return "down"
+                        elif ch2 == b"K":
+                            return "left"
+                        elif ch2 == b"M":
+                            return "right"
+                        elif ch2 == b"S":
+                            return "delete"
+                        elif ch2 == b"G":
+                            return "home"
+                        elif ch2 == b"O":
+                            return "end"
+                    elif ch == b"\r":
+                        return "enter"
+                    elif ch == b"\x1b":
+                        return "escape"
+                    elif ch == b"\t":
+                        return "tab"
+                    elif ch in (b"\x08", b"\x7f"):
+                        return "backspace"
+                    elif ch == b"\x03":
+                        return "quit"
+                    else:
+                        try:
+                            return ch.decode("utf-8", errors="ignore")
+                        except Exception:
+                            return None
+                time.sleep(0.01)
+            return None
+        else:
+            time.sleep(timeout)
             return None
 
 

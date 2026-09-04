@@ -89,13 +89,15 @@ class MpvPlayer:
                     pass
             preexec = _setup_child
 
-        self.process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,
-            preexec_fn=preexec,
-        )
+        popen_kwargs = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+        }
+        if preexec is not None:
+            popen_kwargs["preexec_fn"] = preexec
+
+        self.process = subprocess.Popen(cmd, **popen_kwargs)
 
         # Wait for socket to become available
         connected = False
