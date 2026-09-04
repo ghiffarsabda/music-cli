@@ -230,6 +230,8 @@ class KeyReader:
                     return "enter"
                 elif raw == b"\t":
                     return "tab"
+                elif raw in (b"\x1b[Z",):
+                    return "shift_tab"
                 elif raw in (b"\x7f", b"\x08"):
                     return "backspace"
                 elif raw == b"\x15":  # Ctrl-U

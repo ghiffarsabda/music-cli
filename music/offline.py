@@ -143,14 +143,173 @@ def format_bytes(size_bytes: int | float) -> str:
     return f"{size:.1f} {units[i]}"
 
 
-def init_offline_db(conn: Optional[Any] = None) -> None:
-    """Ensure offline tables and indices are created in library database."""
+def reconcile_offline_tracks_from_disk(conn: Optional[Any] = None) -> int:
+    """Scan downloads/tracks folder and automatically register missing tracks and albums.
+
+    Guarantees that previously downloaded audio files are never lost even if the
+    SQLite database was reinitialized, wiped, or moved across machines.
+    """
+    tracks_dir = get_tracks_dir()
+    if not tracks_dir.exists():
+        return 0
+
+    def _do_sync(c: Any) -> int:
+        now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        try:
+            existing_rows = c.execute("SELECT video_id, file_path FROM offline_tracks").fetchall()
+            existing_vids = {r["video_id"] for r in existing_rows}
+        except Exception:
+            return 0
+
+        # Clean up entries whose files were deleted from disk
+        for r in existing_rows:
+            f_path = r["file_path"]
+            if not os.path.exists(f_path) or os.path.getsize(f_path) == 0:
+                c.execute("DELETE FROM offline_tracks WHERE video_id = ?", (r["video_id"],))
+                existing_vids.discard(r["video_id"])
+
+        synced_count = 0
+        albums_map: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+        for cand in tracks_dir.glob("*"):
+            if not cand.is_file() or cand.stat().st_size == 0:
+                continue
+            if cand.suffix.lower() not in (".mp3", ".m4a", ".opus", ".webm", ".ogg", ".wav", ".flac"):
+                continue
+            if cand.name.endswith((".part", ".ytdl", ".temp")):
+                continue
+
+            m = re.search(r"\[([a-zA-Z0-9_-]{11})\]", cand.name)
+            if not m:
+                continue
+            vid = m.group(1)
+
+            base = cand.stem.rsplit(" [", 1)[0]
+            if " - " in base:
+                artist, title = base.split(" - ", 1)
+            else:
+                artist = "Unknown Artist"
+                title = base
+
+            album = ""
+            dur_sec = 0
+            try:
+                from mutagen.easyid3 import EasyID3
+                tags = EasyID3(cand)
+                if "title" in tags and tags["title"]:
+                    title = tags["title"][0]
+                if "artist" in tags and tags["artist"]:
+                    artist = tags["artist"][0]
+                if "album" in tags and tags["album"]:
+                    album = tags["album"][0]
+            except Exception:
+                pass
+
+            try:
+                from mutagen.mp3 import MP3
+                mp3 = MP3(cand)
+                dur_sec = int(mp3.info.length)
+            except Exception:
+                pass
+
+            dur_str = format_duration(dur_sec) if dur_sec > 0 else "--:--"
+            file_size = cand.stat().st_size
+            audio_fmt = cand.suffix.lstrip(".").lower() or "mp3"
+
+            if album:
+                key = (album.strip().lower(), artist.strip().lower())
+                if key not in albums_map:
+                    albums_map[key] = {
+                        "title": album.strip(),
+                        "author": artist.strip(),
+                        "track_ids": [],
+                    }
+                albums_map[key]["track_ids"].append(vid)
+
+            if vid not in existing_vids:
+                c.execute(
+                    """
+                    INSERT OR REPLACE INTO offline_tracks (
+                        video_id, title, artist, album, duration, duration_seconds,
+                        url, thumbnail, file_path, file_size, audio_format, downloaded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        vid,
+                        title,
+                        artist,
+                        album,
+                        dur_str,
+                        dur_sec,
+                        f"https://www.youtube.com/watch?v={vid}",
+                        "",
+                        str(cand.resolve()),
+                        file_size,
+                        audio_fmt,
+                        now_iso,
+                    ),
+                )
+                existing_vids.add(vid)
+                synced_count += 1
+
+        # Reconcile albums
+        for (alb_low, art_low), a_info in albums_map.items():
+            col_id = f"offline_album_{alb_low.replace(' ', '_')}"
+            row = c.execute(
+                "SELECT id, track_ids FROM offline_collections WHERE id = ? OR LOWER(title) = ?",
+                (col_id, alb_low),
+            ).fetchone()
+            if not row:
+                c.execute(
+                    """
+                    INSERT OR REPLACE INTO offline_collections (
+                        id, type, title, author, track_count, track_ids, thumbnail, downloaded_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        col_id,
+                        "album",
+                        a_info["title"],
+                        a_info["author"],
+                        len(a_info["track_ids"]),
+                        json.dumps(a_info["track_ids"]),
+                        "",
+                        now_iso,
+                    ),
+                )
+            else:
+                try:
+                    cur_tids = json.loads(row["track_ids"])
+                except Exception:
+                    cur_tids = []
+                merged = list(dict.fromkeys(cur_tids + a_info["track_ids"]))
+                if len(merged) != len(cur_tids):
+                    c.execute(
+                        "UPDATE offline_collections SET track_count = ?, track_ids = ? WHERE id = ?",
+                        (len(merged), json.dumps(merged), row["id"]),
+                    )
+
+        c.commit()
+        return synced_count
+
     if conn is not None:
+        return _do_sync(conn)
+    with get_db() as c:
+        return _do_sync(c)
+
+
+def init_offline_db(conn: Optional[Any] = None) -> None:
+    """Ensure offline tables, library tables, and indices are created in library database."""
+    if conn is not None:
+        init_library_db(conn)
         conn.executescript(OFFLINE_SCHEMA_SQL)
+        reconcile_offline_tracks_from_disk(conn)
         return
 
     with get_db() as c:
+        init_library_db(c)
         c.executescript(OFFLINE_SCHEMA_SQL)
+        reconcile_offline_tracks_from_disk(c)
 
 
 def is_track_offline(video_id: str) -> bool:
@@ -296,12 +455,17 @@ def save_offline_collection(
     collection_id: str,
     collection_type: str,
     title: str,
-    author: str,
-    track_ids: List[str],
+    author: str = "",
+    track_ids: Optional[List[str]] = None,
     thumbnail: str = "",
+    **kwargs: Any,
 ) -> None:
     """Save or update offline playlist or album collection record."""
     init_offline_db()
+    if not author and "artist" in kwargs:
+        author = str(kwargs["artist"])
+    if track_ids is None:
+        track_ids = kwargs.get("tracks") or []
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with get_db() as conn:
         conn.execute(
@@ -325,20 +489,22 @@ def save_offline_collection(
 
 
 def list_offline_tracks(query: Optional[str] = None) -> List[SongItem]:
-    """List all downloaded tracks, optionally filtered by search query."""
+    """List all downloaded tracks, optionally filtered by search query with multi-term token matching."""
     init_offline_db()
     items: List[SongItem] = []
     try:
         with get_db() as conn:
             if query and query.strip():
-                clean = f"%{query.strip().lower()}%"
+                tokens = [t.strip().lower() for t in query.strip().split() if t.strip()]
+                conditions = []
+                params = []
+                for tok in tokens:
+                    conditions.append("LOWER(title || ' ' || artist || ' ' || album) LIKE ?")
+                    params.append(f"%{tok}%")
+                where_clause = " AND ".join(conditions)
                 rows = conn.execute(
-                    """
-                    SELECT * FROM offline_tracks
-                    WHERE LOWER(title) LIKE ? OR LOWER(artist) LIKE ? OR LOWER(album) LIKE ?
-                    ORDER BY downloaded_at DESC
-                    """,
-                    (clean, clean, clean),
+                    f"SELECT * FROM offline_tracks WHERE {where_clause} ORDER BY downloaded_at DESC",
+                    params,
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -365,8 +531,11 @@ def list_offline_tracks(query: Optional[str] = None) -> List[SongItem]:
     return items
 
 
-def list_offline_collections(collection_type: Optional[str] = None) -> List[Dict[str, Any]]:
-    """List all offline playlists or albums."""
+def list_offline_collections(
+    collection_type: Optional[str] = None,
+    query: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """List all offline playlists or albums, optionally filtered by search query."""
     init_offline_db()
     collections: List[Dict[str, Any]] = []
     try:
@@ -381,7 +550,14 @@ def list_offline_collections(collection_type: Optional[str] = None) -> List[Dict
                     "SELECT * FROM offline_collections ORDER BY downloaded_at DESC"
                 ).fetchall()
 
+            q_tokens = [t.strip().lower() for t in query.strip().split() if t.strip()] if query else []
+
             for r in rows:
+                if q_tokens:
+                    haystack = f"{r['title']} {r['author']}".lower()
+                    if not all(tok in haystack for tok in q_tokens):
+                        continue
+
                 try:
                     t_ids = json.loads(r["track_ids"])
                 except Exception:
@@ -404,11 +580,16 @@ def list_offline_collections(collection_type: Optional[str] = None) -> List[Dict
 def get_offline_collection(collection_id: str) -> Optional[Dict[str, Any]]:
     """Retrieve collection details by ID or title match."""
     init_offline_db()
+    clean_id = collection_id.strip()
     try:
         with get_db() as conn:
             row = conn.execute(
-                "SELECT * FROM offline_collections WHERE id = ? OR LOWER(title) = ?",
-                (collection_id, collection_id.lower()),
+                """
+                SELECT * FROM offline_collections
+                WHERE id = ? OR LOWER(title) = ? OR id = ? OR LOWER(id) LIKE ?
+                LIMIT 1
+                """,
+                (clean_id, clean_id.lower(), f"offline_album_{clean_id.lower().replace(' ', '_')}", f"%{clean_id.lower()}%"),
             ).fetchone()
             if row:
                 try:

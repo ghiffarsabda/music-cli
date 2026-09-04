@@ -11,6 +11,20 @@ if hasattr(sys.stdout, "reconfigure"):
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8")
 
+import music.config
+import music.library
+import music.offline
+
+_test_tmpdir = tempfile.TemporaryDirectory(prefix="music_cli_test_")
+_test_db = Path(_test_tmpdir.name) / "test_library.db"
+_test_dl = Path(_test_tmpdir.name) / "downloads"
+
+music.config.LIBRARY_DB = _test_db
+music.library.LIBRARY_DB = _test_db
+music.offline.LIBRARY_DB = _test_db
+music.offline.DEFAULT_DOWNLOADS_DIR = _test_dl
+music.config.set_config_val("download_dir", str(_test_dl))
+
 from music.config import set_config_val
 from music.lyrics import fetch_lyrics, parse_lrc
 from music.offline import (
@@ -406,11 +420,15 @@ def test_offline_tab_and_download_options():
 
 
 if __name__ == "__main__":
-    test_offline_helpers()
-    test_offline_track_and_collection_db()
-    test_offline_playback_resolution()
-    test_offline_lyrics_integration()
-    test_offline_search_and_collections()
-    test_download_tracker_and_progress_bars()
-    test_offline_tab_and_download_options()
-    print("\n🎉 ALL OFFLINE MODE TESTS PASSED!")
+    try:
+        test_offline_helpers()
+        test_offline_track_and_collection_db()
+        test_offline_playback_resolution()
+        test_offline_lyrics_integration()
+        test_offline_search_and_collections()
+        test_download_tracker_and_progress_bars()
+        test_offline_tab_and_download_options()
+        print("\n🎉 ALL OFFLINE MODE TESTS PASSED!")
+    finally:
+        set_config_val("download_dir", "")
+        _test_tmpdir.cleanup()

@@ -162,8 +162,40 @@ def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
 
     if filter_mode in ("All", "Offline"):
         try:
-            from music.offline import list_offline_tracks
-            off_tracks = list_offline_tracks(clean_q)[:4]
+            from music.offline import list_offline_tracks, list_offline_collections
+            if filter_mode == "Offline":
+                for p in list_offline_collections("playlist", query=clean_q)[:3]:
+                    local_items.append(
+                        DropdownItem(
+                            kind="playlist",
+                            title=p["title"],
+                            subtitle=p.get("author", "Offline Playlist"),
+                            extra=f"💾 {p.get('track_count', 0)} tracks",
+                            data=PlaylistItem(
+                                title=p["title"],
+                                playlist_id=p["id"],
+                                author=p.get("author", "Offline Playlist"),
+                                track_count=p.get("track_count", 0),
+                                url="",
+                            ),
+                        )
+                    )
+                for a in list_offline_collections("album", query=clean_q)[:3]:
+                    local_items.append(
+                        DropdownItem(
+                            kind="album",
+                            title=a["title"],
+                            subtitle=a.get("author", "Offline Album"),
+                            extra="💾 Album",
+                            data=AlbumItem(
+                                title=a["title"],
+                                browse_id=a["id"],
+                                artist=a.get("author", "Offline Album"),
+                                year="",
+                            ),
+                        )
+                    )
+            off_tracks = list_offline_tracks(clean_q)[:8 if filter_mode == "Offline" else 4]
             for s in off_tracks:
                 local_items.append(
                     DropdownItem(
@@ -499,44 +531,42 @@ def fetch_dropdown_results(
         try:
             from music.offline import list_offline_tracks, list_offline_collections
             # 1. Offline Playlists matching query (or all if query empty)
-            for p in list_offline_collections("playlist"):
-                if not clean_q or clean_q.lower() in p["title"].lower() or clean_q.lower() in p.get("author", "").lower():
-                    if p["id"] not in seen_ids:
-                        seen_ids.add(p["id"])
-                        items.append(
-                            DropdownItem(
-                                kind="playlist",
+            for p in list_offline_collections("playlist", query=clean_q):
+                if p["id"] not in seen_ids:
+                    seen_ids.add(p["id"])
+                    items.append(
+                        DropdownItem(
+                            kind="playlist",
+                            title=p["title"],
+                            subtitle=p.get("author", "Offline Playlist"),
+                            extra=f"💾 {p.get('track_count', 0)} tracks",
+                            data=PlaylistItem(
                                 title=p["title"],
-                                subtitle=p.get("author", "Offline Playlist"),
-                                extra=f"💾 {p.get('track_count', 0)} tracks",
-                                data=PlaylistItem(
-                                    title=p["title"],
-                                    playlist_id=p["id"],
-                                    author=p.get("author", "Offline Playlist"),
-                                    track_count=p.get("track_count", 0),
-                                    url="",
-                                ),
-                            )
+                                playlist_id=p["id"],
+                                author=p.get("author", "Offline Playlist"),
+                                track_count=p.get("track_count", 0),
+                                url="",
+                            ),
                         )
+                    )
             # 2. Offline Albums matching query (or all if query empty)
-            for a in list_offline_collections("album"):
-                if not clean_q or clean_q.lower() in a["title"].lower() or clean_q.lower() in a.get("author", "").lower():
-                    if a["id"] not in seen_ids:
-                        seen_ids.add(a["id"])
-                        items.append(
-                            DropdownItem(
-                                kind="album",
+            for a in list_offline_collections("album", query=clean_q):
+                if a["id"] not in seen_ids:
+                    seen_ids.add(a["id"])
+                    items.append(
+                        DropdownItem(
+                            kind="album",
+                            title=a["title"],
+                            subtitle=a.get("author", "Offline Album"),
+                            extra="💾 Album",
+                            data=AlbumItem(
                                 title=a["title"],
-                                subtitle=a.get("author", "Offline Album"),
-                                extra="💾 Album",
-                                data=AlbumItem(
-                                    title=a["title"],
-                                    browse_id=a["id"],
-                                    artist=a.get("author", "Offline Album"),
-                                    year="",
-                                ),
-                            )
+                                browse_id=a["id"],
+                                artist=a.get("author", "Offline Album"),
+                                year="",
+                            ),
                         )
+                    )
             # 3. Offline Tracks matching query (or all if query empty)
             off_limit = max(limit, 100) if not clean_q else limit
             for t in list_offline_tracks(clean_q)[:off_limit]:
@@ -639,7 +669,7 @@ def render_home_screen(
     console_height: int = 24,
     now_playing: Optional[Tuple[SongItem, str, int]] = None,
     notification_msg: str = "",
-    action_dialog_item: Optional[Tuple[str, str, str]] = None,
+    action_dialog_item: Optional[Tuple[Any, ...]] = None,
     action_dialog_idx: int = 0,
 ) -> Group:
     """Build the OpenCode-styled home layout with vertical/horizontal centering and viewport scrolling."""
@@ -890,6 +920,15 @@ def render_home_screen(
         action_table.add_row(prefix0, text0)
         action_table.add_row(prefix1, text1)
         action_table.add_row(prefix2, text2)
+        if act_kind in ("album", "playlist"):
+            is_act3 = (action_dialog_idx == 3)
+            prefix3 = "[bold cyan]▶[/bold cyan]" if is_act3 else "  "
+            text3 = (
+                "[bold bright_white on blue] 4. View Tracks [/bold bright_white on blue] [dim](expand tracks in search list)[/dim]"
+                if is_act3
+                else "[bold white]4. View Tracks[/bold white] [dim](expand tracks in search list)[/dim]"
+            )
+            action_table.add_row(prefix3, text3)
 
         dialog_panel = Panel(
             action_table,
@@ -906,18 +945,19 @@ def render_home_screen(
     if current_kind in ("album", "playlist"):
         c_id = getattr(items[selected_idx].data, "browse_id", None) or getattr(items[selected_idx].data, "playlist_id", None) or ""
         if active_expanded_id and active_expanded_id == c_id:
-            tab_action = "Close [bold cyan]Tab[/bold cyan]"
+            tab_action = "Close [bold cyan]← / Tab[/bold cyan]"
         else:
-            tab_action = "Songs [bold cyan]Tab[/bold cyan]"
+            tab_action = "Expand [bold cyan]→[/bold cyan]   [dim]•[/dim]   Tab [bold cyan]Switch Filter[/bold cyan]"
     elif current_kind in ("child_track", "playlist_track", "child_loading", "playlist_loading"):
-        tab_action = "Close [bold cyan]Tab[/bold cyan]"
+        tab_action = "Close [bold cyan]← / Tab[/bold cyan]"
     else:
-        tab_action = "Filter [bold cyan]Tab[/bold cyan]"
+        tab_action = "Tab [bold cyan]Switch Filter[/bold cyan]"
 
     if action_dialog_item:
         act_chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
         is_dl = check_item_downloaded(act_chosen)
         opt3_str = "[bold green]3[/bold green] Downloaded   [dim]•[/dim]   " if is_dl else "[bold white]3[/bold white] Download   [dim]•[/dim]   "
+        opt4_str = "[bold white]4[/bold white] View Tracks   [dim]•[/dim]   " if act_kind in ("album", "playlist") else ""
         footer = Align.center(
             Text.from_markup(
                 "[bold cyan]↑/↓[/bold cyan] Select   [dim]•[/dim]   "
@@ -925,6 +965,7 @@ def render_home_screen(
                 "[bold white]1[/bold white] Play Now   [dim]•[/dim]   "
                 "[bold white]2[/bold white] Add to Queue   [dim]•[/dim]   "
                 f"{opt3_str}"
+                f"{opt4_str}"
                 "[bold white]Esc[/bold white] Cancel"
             )
         )
@@ -1064,7 +1105,7 @@ def run_home_view(
                     last_searched_query = current_q
                     last_searched_mode = current_mode
                     is_searching = False
-                    session_cache[current_q.lower()] = new_items
+                    session_cache[f"{current_mode}:{current_q.lower()}"] = new_items
                     scroll_offset = 0
                     selected_idx = 0
                     expanded_container_id = None
@@ -1085,6 +1126,220 @@ def run_home_view(
             else:
                 has_more = False
             is_loading_more = False
+
+    def expand_container_item(target_item: DropdownItem) -> None:
+        nonlocal items, selected_idx, expanded_container_id
+        if target_item.kind == "album" and hasattr(target_item.data, "browse_id"):
+            target_bid = target_item.data.browse_id
+            if expanded_container_id == target_bid:
+                with lock:
+                    items = collapse_container_accordion(items, target_bid)
+                    expanded_container_id = None
+                return
+
+            if expanded_container_id is not None:
+                with lock:
+                    items = collapse_container_accordion(items, expanded_container_id)
+                    expanded_container_id = None
+                    for p_idx, it in enumerate(items):
+                        if getattr(it.data, "browse_id", None) == target_bid:
+                            selected_idx = p_idx
+                            target_item = it
+                            break
+
+            if target_bid in _ALBUM_CACHE:
+                cached_tracks = _ALBUM_CACHE[target_bid]
+                total_t = len(cached_tracks)
+                child_items = []
+                for t_idx, t in enumerate(cached_tracks):
+                    tree_p = "└─" if t_idx == total_t - 1 else "├─"
+                    child_items.append(
+                        DropdownItem(
+                            kind="child_track",
+                            title=t.title,
+                            subtitle=t.artist,
+                            extra=t.duration or "--:--",
+                            data=ContainerTrackData(
+                                song=t,
+                                parent_title=target_item.data.title,
+                                parent_type="album",
+                                full_tracks=cached_tracks,
+                                track_index=t_idx,
+                                parent_item=target_item.data,
+                            ),
+                            parent_id=target_bid,
+                            tree_prefix=tree_p,
+                        )
+                    )
+                with lock:
+                    items[selected_idx + 1 : selected_idx + 1] = child_items
+                    expanded_container_id = target_bid
+                    selected_idx += 1
+            else:
+                loading_item = DropdownItem(
+                    kind="child_loading",
+                    title="Fetching album tracks...",
+                    subtitle=getattr(target_item.data, "artist", "Album"),
+                    extra="⠋",
+                    data=target_item.data,
+                    parent_id=target_bid,
+                    tree_prefix="├─",
+                )
+                with lock:
+                    items.insert(selected_idx + 1, loading_item)
+                    expanded_container_id = target_bid
+                    selected_idx += 1
+
+                def fetch_album_task(a_meta, bid):
+                    nonlocal items, selected_idx
+                    _, tracks = get_album_tracks(bid, limit=100)
+                    if tracks:
+                        _ALBUM_CACHE[bid] = tracks
+                        total_t = len(tracks)
+                        child_items = []
+                        for t_idx, t in enumerate(tracks):
+                            tree_p = "└─" if t_idx == total_t - 1 else "├─"
+                            child_items.append(
+                                DropdownItem(
+                                    kind="child_track",
+                                    title=t.title,
+                                    subtitle=t.artist,
+                                    extra=t.duration or "--:--",
+                                    data=ContainerTrackData(
+                                        song=t,
+                                        parent_title=a_meta.title,
+                                        parent_type="album",
+                                        full_tracks=tracks,
+                                        track_index=t_idx,
+                                        parent_item=a_meta,
+                                    ),
+                                    parent_id=bid,
+                                    tree_prefix=tree_p,
+                                )
+                            )
+                        with lock:
+                            new_list = []
+                            for it in items:
+                                if it.kind == "child_loading" and it.parent_id == bid:
+                                    new_list.extend(child_items)
+                                else:
+                                    new_list.append(it)
+                            items = new_list
+                    else:
+                        with lock:
+                            items = [it for it in items if not (it.kind == "child_loading" and it.parent_id == bid)]
+
+                threading.Thread(
+                    target=fetch_album_task,
+                    args=(target_item.data, target_bid),
+                    daemon=True,
+                ).start()
+
+        elif target_item.kind == "playlist" and hasattr(target_item.data, "playlist_id"):
+            target_pid = target_item.data.playlist_id
+            if expanded_container_id == target_pid:
+                with lock:
+                    items = collapse_container_accordion(items, target_pid)
+                    expanded_container_id = None
+                return
+
+            if expanded_container_id is not None:
+                with lock:
+                    items = collapse_container_accordion(items, expanded_container_id)
+                    expanded_container_id = None
+                    for p_idx, it in enumerate(items):
+                        if getattr(it.data, "playlist_id", None) == target_pid:
+                            selected_idx = p_idx
+                            target_item = it
+                            break
+
+            if target_pid in _PLAYLIST_CACHE:
+                cached_tracks = _PLAYLIST_CACHE[target_pid]
+                total_t = len(cached_tracks)
+                child_items = []
+                for t_idx, t in enumerate(cached_tracks):
+                    tree_p = "└─" if t_idx == total_t - 1 else "├─"
+                    child_items.append(
+                        DropdownItem(
+                            kind="child_track",
+                            title=t.title,
+                            subtitle=t.artist,
+                            extra=t.duration or "--:--",
+                            data=ContainerTrackData(
+                                song=t,
+                                parent_title=target_item.data.title,
+                                parent_type="playlist",
+                                full_tracks=cached_tracks,
+                                track_index=t_idx,
+                                parent_item=target_item.data,
+                            ),
+                            parent_id=target_pid,
+                            tree_prefix=tree_p,
+                        )
+                    )
+                with lock:
+                    items[selected_idx + 1 : selected_idx + 1] = child_items
+                    expanded_container_id = target_pid
+                    selected_idx += 1
+            else:
+                loading_item = DropdownItem(
+                    kind="child_loading",
+                    title="Fetching playlist tracks...",
+                    subtitle=getattr(target_item.data, "author", "Playlist"),
+                    extra="⠋",
+                    data=target_item.data,
+                    parent_id=target_pid,
+                    tree_prefix="├─",
+                )
+                with lock:
+                    items.insert(selected_idx + 1, loading_item)
+                    expanded_container_id = target_pid
+                    selected_idx += 1
+
+                def fetch_playlist_task(p_meta, pid):
+                    nonlocal items, selected_idx
+                    _, tracks = get_playlist_tracks(pid, limit=100)
+                    if tracks:
+                        _PLAYLIST_CACHE[pid] = tracks
+                        total_t = len(tracks)
+                        child_items = []
+                        for t_idx, t in enumerate(tracks):
+                            tree_p = "└─" if t_idx == total_t - 1 else "├─"
+                            child_items.append(
+                                DropdownItem(
+                                    kind="child_track",
+                                    title=t.title,
+                                    subtitle=t.artist,
+                                    extra=t.duration or "--:--",
+                                    data=ContainerTrackData(
+                                        song=t,
+                                        parent_title=p_meta.title,
+                                        parent_type="playlist",
+                                        full_tracks=tracks,
+                                        track_index=t_idx,
+                                        parent_item=p_meta,
+                                    ),
+                                    parent_id=pid,
+                                    tree_prefix=tree_p,
+                                )
+                            )
+                        with lock:
+                            new_list = []
+                            for it in items:
+                                if it.kind == "child_loading" and it.parent_id == pid:
+                                    new_list.extend(child_items)
+                                else:
+                                    new_list.append(it)
+                            items = new_list
+                    else:
+                        with lock:
+                            items = [it for it in items if not (it.kind == "child_loading" and it.parent_id == pid)]
+
+                threading.Thread(
+                    target=fetch_playlist_task,
+                    args=(target_item.data, target_pid),
+                    daemon=True,
+                ).start()
 
     search_thread = threading.Thread(target=initial_search_worker, daemon=True)
     search_thread.start()
@@ -1145,11 +1400,7 @@ def run_home_view(
                     console_height=term_h,
                     now_playing=now_playing_tuple,
                     notification_msg=notification_msg,
-                    action_dialog_item=(
-                        (action_dialog_item[0], action_dialog_item[1], action_dialog_item[2])
-                        if action_dialog_item
-                        else None
-                    ),
+                    action_dialog_item=action_dialog_item,
                     action_dialog_idx=action_dialog_idx,
                 )
                 live.update(screen)
@@ -1170,11 +1421,12 @@ def run_home_view(
 
                 # Action Dialog handling when choosing Play Now vs Add to Queue vs Download
                 if action_dialog_item is not None:
+                    max_opts = 4 if (action_dialog_item and len(action_dialog_item) > 2 and action_dialog_item[2] in ("album", "playlist")) else 3
                     if key in ("up", "k", "K"):
-                        action_dialog_idx = (action_dialog_idx - 1) % 3
+                        action_dialog_idx = (action_dialog_idx - 1) % max_opts
                         continue
                     elif key in ("down", "j", "J"):
-                        action_dialog_idx = (action_dialog_idx + 1) % 3
+                        action_dialog_idx = (action_dialog_idx + 1) % max_opts
                         continue
                     elif key in ("1", "p", "P") or (key in ("\r", "\n", "enter") and action_dialog_idx == 0):
                         chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
@@ -1331,48 +1583,61 @@ def run_home_view(
                             elif chosen.kind == "album":
                                 album_data = chosen.data
                                 notification_msg = f"[bold green]⬇ Downloading album '{truncate_str(chosen.title, 24)}'...[/bold green]"
-                                def _bg_dl_album(a_item):
+                                def _bg_dl_album(a_item, item_title):
                                     try:
                                         from music.search import get_album_tracks
-                                        _, tracks = get_album_tracks(a_item.browse_id)
+                                        bid = getattr(a_item, "browse_id", None) or getattr(a_item, "id", None) or item_title
+                                        _, tracks = get_album_tracks(bid)
                                         if tracks:
-                                            download_songs_batch(tracks, collection_type="album", collection_title=a_item.title, show_cli_progress=False)
+                                            alb_title = getattr(a_item, "title", item_title)
+                                            alb_author = getattr(a_item, "artist", "") or getattr(a_item, "author", "") or ""
+                                            download_songs_batch(tracks, collection_type="album", collection_title=alb_title, show_cli_progress=False)
                                             save_offline_collection(
-                                                collection_id=a_item.browse_id,
+                                                collection_id=bid,
                                                 collection_type="album",
-                                                title=a_item.title,
-                                                artist=getattr(a_item, "artist", "") or "",
+                                                title=alb_title,
+                                                author=alb_author,
                                                 track_count=len(tracks),
                                                 track_ids=[t.video_id for t in tracks],
                                             )
                                     except Exception:
                                         pass
-                                threading.Thread(target=_bg_dl_album, args=(album_data,), daemon=True).start()
+                                threading.Thread(target=_bg_dl_album, args=(album_data, chosen.title), daemon=True).start()
                             elif chosen.kind == "playlist":
                                 pl_data = chosen.data
                                 notification_msg = f"[bold green]⬇ Downloading playlist '{truncate_str(chosen.title, 24)}'...[/bold green]"
-                                def _bg_dl_playlist(p_item):
+                                def _bg_dl_playlist(p_item, item_title):
                                     try:
                                         from music.search import get_playlist_tracks
-                                        _, tracks = get_playlist_tracks(p_item.playlist_id)
+                                        pid = getattr(p_item, "playlist_id", None) or getattr(p_item, "id", None) or item_title
+                                        _, tracks = get_playlist_tracks(pid)
                                         if tracks:
-                                            download_songs_batch(tracks, collection_type="playlist", collection_title=p_item.title, show_cli_progress=False)
+                                            pl_title = getattr(p_item, "title", item_title)
+                                            pl_author = getattr(p_item, "author", "") or getattr(p_item, "artist", "") or ""
+                                            download_songs_batch(tracks, collection_type="playlist", collection_title=pl_title, show_cli_progress=False)
                                             save_offline_collection(
-                                                collection_id=p_item.playlist_id,
+                                                collection_id=pid,
                                                 collection_type="playlist",
-                                                title=p_item.title,
-                                                artist=getattr(p_item, "author", "") or "",
+                                                title=pl_title,
+                                                author=pl_author,
                                                 track_count=len(tracks),
                                                 track_ids=[t.video_id for t in tracks],
                                             )
                                     except Exception:
                                         pass
-                                threading.Thread(target=_bg_dl_playlist, args=(pl_data,), daemon=True).start()
+                                threading.Thread(target=_bg_dl_playlist, args=(pl_data, chosen.title), daemon=True).start()
                             else:
                                 notification_msg = f"[bold yellow]Unable to download {chosen.kind}[/bold yellow]"
                         except Exception as e:
                             notification_msg = f"[bold red]Download failed to start: {e}[/bold red]"
                         notif_clear_time = time.time() + 3.0
+                        continue
+                    elif key in ("4", "v", "V") or (key in ("\r", "\n", "enter") and action_dialog_idx == 3):
+                        chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
+                        action_dialog_item = None
+                        action_dialog_idx = 0
+                        if chosen is not None and chosen.kind in ("album", "playlist"):
+                            expand_container_item(chosen)
                         continue
                     elif key in ("escape", "quit"):
                         action_dialog_item = None
@@ -1413,23 +1678,52 @@ def run_home_view(
                     running = False
                     return None
 
-                elif key in ("left", "h", "H") and not query:
+                elif key == "left":
+                    if expanded_container_id is not None:
+                        with lock:
+                            items = collapse_container_accordion(items, expanded_container_id)
+                            expanded_container_id = None
+                        continue
+                    elif not query:
+                        filter_idx = (filter_idx - 1) % len(filter_modes)
+                        with lock:
+                            items = get_default_items(filter_modes[filter_idx])
+                            seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
+                        selected_idx = 0
+                        scroll_offset = 0
+                        continue
+
+                elif key in ("shift_tab",):
+                    if expanded_container_id is not None:
+                        with lock:
+                            items = collapse_container_accordion(items, expanded_container_id)
+                            expanded_container_id = None
                     filter_idx = (filter_idx - 1) % len(filter_modes)
                     with lock:
-                        items = get_default_items(filter_modes[filter_idx])
-                        seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
+                        if query.strip():
+                            is_searching = True
+                        else:
+                            items = get_default_items(filter_modes[filter_idx])
+                            seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
+                    last_key_time = time.time()
                     selected_idx = 0
                     scroll_offset = 0
                     continue
 
-                elif key in ("right",) and not query:
-                    filter_idx = (filter_idx + 1) % len(filter_modes)
-                    with lock:
-                        items = get_default_items(filter_modes[filter_idx])
-                        seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
-                    selected_idx = 0
-                    scroll_offset = 0
-                    continue
+                elif key == "right":
+                    if curr_items and 0 <= selected_idx < len(curr_items):
+                        curr_item = curr_items[selected_idx]
+                        if curr_item.kind in ("album", "playlist"):
+                            expand_container_item(curr_item)
+                            continue
+                    if not query:
+                        filter_idx = (filter_idx + 1) % len(filter_modes)
+                        with lock:
+                            items = get_default_items(filter_modes[filter_idx])
+                            seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
+                        selected_idx = 0
+                        scroll_offset = 0
+                        continue
 
                 elif key == "up":
                     if curr_items:
@@ -1452,11 +1746,10 @@ def run_home_view(
                                 daemon=True,
                             ).start()
 
-                elif key in ("tab", "	"):
+                elif key in ("tab", "\t"):
                     if curr_items and 0 <= selected_idx < len(curr_items):
                         curr_item = curr_items[selected_idx]
-
-                        # Case A: Inside open child tracks -> collapse and focus back on parent
+                        # If cursor is inside expanded child tracks, collapse back to parent
                         if curr_item.kind in ("child_track", "playlist_track", "child_loading", "playlist_loading"):
                             target_pid = curr_item.parent_id
                             with lock:
@@ -1469,227 +1762,11 @@ def run_home_view(
                                         break
                             continue
 
-                        # Case B: On Album item -> toggle album accordion
-                        elif curr_item.kind == "album" and hasattr(curr_item.data, "browse_id"):
-                            target_bid = curr_item.data.browse_id
-
-                            if expanded_container_id == target_bid:
-                                with lock:
-                                    items = collapse_container_accordion(items, target_bid)
-                                    expanded_container_id = None
-                                continue
-
-                            if expanded_container_id is not None:
-                                with lock:
-                                    items = collapse_container_accordion(items, expanded_container_id)
-                                    expanded_container_id = None
-                                    for p_idx, it in enumerate(items):
-                                        if getattr(it.data, "browse_id", None) == target_bid:
-                                            selected_idx = p_idx
-                                            curr_item = it
-                                            break
-
-                            if target_bid in _ALBUM_CACHE:
-                                cached_tracks = _ALBUM_CACHE[target_bid]
-                                total_t = len(cached_tracks)
-                                child_items = []
-                                for t_idx, t in enumerate(cached_tracks):
-                                    tree_p = "└─" if t_idx == total_t - 1 else "├─"
-                                    child_items.append(
-                                        DropdownItem(
-                                            kind="child_track",
-                                            title=t.title,
-                                            subtitle=t.artist,
-                                            extra=t.duration or "--:--",
-                                            data=ContainerTrackData(
-                                                song=t,
-                                                parent_title=curr_item.data.title,
-                                                parent_type="album",
-                                                full_tracks=cached_tracks,
-                                                track_index=t_idx,
-                                                parent_item=curr_item.data,
-                                            ),
-                                            parent_id=target_bid,
-                                            tree_prefix=tree_p,
-                                        )
-                                    )
-                                with lock:
-                                    items[selected_idx + 1 : selected_idx + 1] = child_items
-                                    expanded_container_id = target_bid
-                                    selected_idx += 1
-                                continue
-                            else:
-                                loading_item = DropdownItem(
-                                    kind="child_loading",
-                                    title="Fetching album tracks...",
-                                    subtitle=curr_item.data.artist,
-                                    extra="⠋",
-                                    data=curr_item.data,
-                                    parent_id=target_bid,
-                                    tree_prefix="├─",
-                                )
-                                with lock:
-                                    items.insert(selected_idx + 1, loading_item)
-                                    expanded_container_id = target_bid
-                                    selected_idx += 1
-
-                                def fetch_album_task(a_meta, bid):
-                                    nonlocal items, selected_idx
-                                    _, tracks = get_album_tracks(bid, limit=100)
-                                    if tracks:
-                                        _ALBUM_CACHE[bid] = tracks
-                                        total_t = len(tracks)
-                                        child_items = []
-                                        for t_idx, t in enumerate(tracks):
-                                            tree_p = "└─" if t_idx == total_t - 1 else "├─"
-                                            child_items.append(
-                                                DropdownItem(
-                                                    kind="child_track",
-                                                    title=t.title,
-                                                    subtitle=t.artist,
-                                                    extra=t.duration or "--:--",
-                                                    data=ContainerTrackData(
-                                                        song=t,
-                                                        parent_title=a_meta.title,
-                                                        parent_type="album",
-                                                        full_tracks=tracks,
-                                                        track_index=t_idx,
-                                                        parent_item=a_meta,
-                                                    ),
-                                                    parent_id=bid,
-                                                    tree_prefix=tree_p,
-                                                )
-                                            )
-                                        with lock:
-                                            new_list = []
-                                            for it in items:
-                                                if it.kind == "child_loading" and it.parent_id == bid:
-                                                    new_list.extend(child_items)
-                                                else:
-                                                    new_list.append(it)
-                                            items = new_list
-                                    else:
-                                        with lock:
-                                            items = [it for it in items if not (it.kind == "child_loading" and it.parent_id == bid)]
-
-                                threading.Thread(
-                                    target=fetch_album_task,
-                                    args=(curr_item.data, target_bid),
-                                    daemon=True,
-                                ).start()
-                                continue
-
-                        # Case C: On Playlist item -> toggle playlist accordion
-                        elif curr_item.kind == "playlist" and hasattr(curr_item.data, "playlist_id"):
-                            target_pid = curr_item.data.playlist_id
-
-                            if expanded_container_id == target_pid:
-                                with lock:
-                                    items = collapse_container_accordion(items, target_pid)
-                                    expanded_container_id = None
-                                continue
-
-                            if expanded_container_id is not None:
-                                with lock:
-                                    items = collapse_container_accordion(items, expanded_container_id)
-                                    expanded_container_id = None
-                                    for p_idx, it in enumerate(items):
-                                        if getattr(it.data, "playlist_id", None) == target_pid:
-                                            selected_idx = p_idx
-                                            curr_item = it
-                                            break
-
-                            if target_pid in _PLAYLIST_CACHE:
-                                cached_tracks = _PLAYLIST_CACHE[target_pid]
-                                total_t = len(cached_tracks)
-                                child_items = []
-                                for t_idx, t in enumerate(cached_tracks):
-                                    tree_p = "└─" if t_idx == total_t - 1 else "├─"
-                                    child_items.append(
-                                        DropdownItem(
-                                            kind="child_track",
-                                            title=t.title,
-                                            subtitle=t.artist,
-                                            extra=t.duration or "--:--",
-                                            data=ContainerTrackData(
-                                                song=t,
-                                                parent_title=curr_item.data.title,
-                                                parent_type="playlist",
-                                                full_tracks=cached_tracks,
-                                                track_index=t_idx,
-                                                parent_item=curr_item.data,
-                                            ),
-                                            parent_id=target_pid,
-                                            tree_prefix=tree_p,
-                                        )
-                                    )
-                                with lock:
-                                    items[selected_idx + 1 : selected_idx + 1] = child_items
-                                    expanded_container_id = target_pid
-                                    selected_idx += 1
-                                continue
-                            else:
-                                loading_item = DropdownItem(
-                                    kind="child_loading",
-                                    title="Fetching playlist tracks...",
-                                    subtitle=curr_item.data.author,
-                                    extra="⠋",
-                                    data=curr_item.data,
-                                    parent_id=target_pid,
-                                    tree_prefix="├─",
-                                )
-                                with lock:
-                                    items.insert(selected_idx + 1, loading_item)
-                                    expanded_container_id = target_pid
-                                    selected_idx += 1
-
-                                def fetch_playlist_task(p_meta, pid):
-                                    nonlocal items, selected_idx
-                                    _, tracks = get_playlist_tracks(pid, limit=100)
-                                    if tracks:
-                                        _PLAYLIST_CACHE[pid] = tracks
-                                        total_t = len(tracks)
-                                        child_items = []
-                                        for t_idx, t in enumerate(tracks):
-                                            tree_p = "└─" if t_idx == total_t - 1 else "├─"
-                                            child_items.append(
-                                                DropdownItem(
-                                                    kind="child_track",
-                                                    title=t.title,
-                                                    subtitle=t.artist,
-                                                    extra=t.duration or "--:--",
-                                                    data=ContainerTrackData(
-                                                        song=t,
-                                                        parent_title=p_meta.title,
-                                                        parent_type="playlist",
-                                                        full_tracks=tracks,
-                                                        track_index=t_idx,
-                                                        parent_item=p_meta,
-                                                    ),
-                                                    parent_id=pid,
-                                                    tree_prefix=tree_p,
-                                                )
-                                            )
-                                        with lock:
-                                            new_list = []
-                                            for it in items:
-                                                if it.kind == "child_loading" and it.parent_id == pid:
-                                                    new_list.extend(child_items)
-                                                else:
-                                                    new_list.append(it)
-                                            items = new_list
-                                    else:
-                                        with lock:
-                                            items = [it for it in items if not (it.kind == "child_loading" and it.parent_id == pid)]
-
-                                threading.Thread(
-                                    target=fetch_playlist_task,
-                                    args=(curr_item.data, target_pid),
-                                    daemon=True,
-                                ).start()
-                                continue
-
-                    # Case D: Regular item -> cycle search filter mode
+                    # Tab cycles search filter mode cleanly
+                    if expanded_container_id is not None:
+                        with lock:
+                            items = collapse_container_accordion(items, expanded_container_id)
+                            expanded_container_id = None
                     filter_idx = (filter_idx + 1) % len(filter_modes)
                     with lock:
                         if query.strip():
@@ -1741,8 +1818,10 @@ def run_home_view(
                     if query:
                         query = query[:-1]
                         clean_low = query.strip().lower()
-                        cached_items = session_cache.get(clean_low)
-                        local_matches = fetch_local_matches(query, filter_modes[filter_idx])
+                        curr_mode = filter_modes[filter_idx]
+                        cache_key = f"{curr_mode}:{clean_low}"
+                        cached_items = session_cache.get(cache_key)
+                        local_matches = fetch_local_matches(query, curr_mode)
                         with lock:
                             if cached_items:
                                 items = cached_items
@@ -1754,7 +1833,7 @@ def run_home_view(
                                 is_searching = True
                             else:
                                 is_searching = False
-                                items = get_default_items()
+                                items = get_default_items(curr_mode)
                             expanded_container_id = None
                         last_key_time = time.time()
                         selected_idx = 0
@@ -1762,9 +1841,10 @@ def run_home_view(
 
                 elif key in ("ctrl_u", "\x15"):
                     query = ""
+                    curr_mode = filter_modes[filter_idx]
                     with lock:
                         is_searching = False
-                        items = get_default_items()
+                        items = get_default_items(curr_mode)
                         expanded_container_id = None
                     last_key_time = time.time()
                     selected_idx = 0
@@ -1773,20 +1853,24 @@ def run_home_view(
                 elif len(key) == 1 and key.isprintable():
                     query += key
                     clean_low = query.strip().lower()
+                    curr_mode = filter_modes[filter_idx]
 
                     # M2: In-memory prefix narrowing across active session results in RAM (0ms)
                     narrowed = []
-                    for base_q in sorted(session_cache.keys(), key=len, reverse=True):
-                        if clean_low.startswith(base_q):
-                            base_items = session_cache[base_q]
-                            narrowed = [
-                                it for it in base_items
-                                if clean_low in it.title.lower() or clean_low in it.subtitle.lower()
-                            ]
-                            if narrowed:
-                                break
+                    prefix_tag = f"{curr_mode}:"
+                    for base_key in sorted(session_cache.keys(), key=len, reverse=True):
+                        if base_key.startswith(prefix_tag):
+                            base_q = base_key[len(prefix_tag):]
+                            if clean_low.startswith(base_q) and base_q:
+                                base_items = session_cache[base_key]
+                                narrowed = [
+                                    it for it in base_items
+                                    if clean_low in it.title.lower() or clean_low in it.subtitle.lower()
+                                ]
+                                if narrowed:
+                                    break
 
-                    local_matches = fetch_local_matches(query, filter_modes[filter_idx])
+                    local_matches = fetch_local_matches(query, curr_mode)
                     with lock:
                         if narrowed:
                             items = narrowed

@@ -314,19 +314,18 @@ def search_playlists(query: str, limit: int = 5) -> List[PlaylistItem]:
     try:
         from music.offline import is_offline_mode_enabled, list_offline_collections
         if is_offline_mode_enabled():
-            cols = list_offline_collections("playlist")
+            cols = list_offline_collections("playlist", query=query)
             matched = []
             for c in cols:
-                if query.lower() in c["title"].lower() or query.lower() in c.get("author", "").lower():
-                    matched.append(
-                        PlaylistItem(
-                            title=c["title"],
-                            playlist_id=c["id"],
-                            author=c.get("author", "Offline Collection"),
-                            track_count=c.get("track_count", 0),
-                            url="",
-                        )
+                matched.append(
+                    PlaylistItem(
+                        title=c["title"],
+                        playlist_id=c["id"],
+                        author=c.get("author", "Offline Collection"),
+                        track_count=c.get("track_count", 0),
+                        url="",
                     )
+                )
             if matched:
                 return matched[:limit]
     except Exception:
@@ -564,19 +563,18 @@ def search_albums(query: str, limit: int = 5) -> List[AlbumItem]:
     try:
         from music.offline import is_offline_mode_enabled, list_offline_collections
         if is_offline_mode_enabled():
-            cols = list_offline_collections("album")
+            cols = list_offline_collections("album", query=clean)
             matched = []
             for c in cols:
-                if clean.lower() in c["title"].lower() or clean.lower() in c.get("author", "").lower():
-                    matched.append(
-                        AlbumItem(
-                            title=c["title"],
-                            browse_id=c["id"],
-                            artist=c.get("author", "Offline Collection"),
-                            year="",
-                            track_count=c.get("track_count", 0),
-                        )
+                matched.append(
+                    AlbumItem(
+                        title=c["title"],
+                        browse_id=c["id"],
+                        artist=c.get("author", "Offline Collection"),
+                        year="",
+                        track_count=c.get("track_count", 0),
                     )
+                )
             if matched:
                 return matched[:limit]
     except Exception:
