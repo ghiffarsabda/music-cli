@@ -89,6 +89,22 @@ def test_player_ipc():
         st = player.get_status()
         assert st["muted"] is False
 
+        # Pause and stop_track tests
+        player.pause()
+        time.sleep(0.1)
+        st = player.get_status()
+        assert st["paused"] is True
+
+        player.stop_track()
+        time.sleep(0.1)
+        st = player.get_status()
+        assert st["time_pos"] == 0.0
+
+        player.resume()
+        time.sleep(0.1)
+        st = player.get_status()
+        assert st["paused"] is False
+
         print("✓ Player IPC socket tests passed")
     finally:
         player.stop()

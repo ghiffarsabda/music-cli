@@ -584,6 +584,7 @@ def run_player_loop(
     seen_ids = {curr_song.video_id} | {s.video_id for s in queue}
     playlist_total = playlist_pos[1] if playlist_pos else ((len(initial_queue) + 1) if playlist_name and initial_queue else (1 if playlist_name else 0))
     playlist_index = playlist_pos[0] if playlist_pos else (1 if playlist_name else 0)
+    is_playlist_mode = bool(playlist_name or initial_queue)
 
     buffered_song: Optional[SongItem] = None
     prebuffering_vid: Optional[str] = None
@@ -604,14 +605,15 @@ def run_player_loop(
     play_token = 0
     is_loading_stream = False
 
-    def switch_to_song_optimistic(new_song: SongItem, status_msg: str = "Playing"):
+    def switch_to_song_optimistic(new_song: SongItem, status_msg: str = "Playing", is_previous: bool = False):
         nonlocal curr_song, play_token, is_loading_stream, message, msg_clear_time
         nonlocal current_lyrics, current_segments, skipped_ranges, buffered_song, prebuffering_vid
 
-        history_queue.append(curr_song)
-        curr_song = new_song
-        add_to_history(curr_song)
+        if not is_previous:
+            history_queue.append(curr_song)
+            add_to_history(curr_song)
 
+        curr_song = new_song
         play_token += 1
         this_token = play_token
         is_loading_stream = True
@@ -629,6 +631,8 @@ def run_player_loop(
 
         if was_buffered:
             player.next_track()
+            player.remove_track(0)
+            player.resume()
             is_loading_stream = False
             message = f"▶ {status_msg}: {_truncate_text(curr_song.title, 26)}"
             msg_clear_time = time.time() + 2.5
@@ -637,7 +641,7 @@ def run_player_loop(
             sync_prebuffered_track()
         else:
             player.clear_playlist_queue()
-            player.pause()
+            player.stop_track()
 
             def _async_play_worker(target_song: SongItem, token: int):
                 nonlocal is_loading_stream, message, msg_clear_time
@@ -646,6 +650,7 @@ def run_player_loop(
                     if token != play_token:
                         return
                     player.play(url)
+                    player.resume()
                     is_loading_stream = False
                     message = f"▶ {status_msg}: {_truncate_text(target_song.title, 26)}"
                     msg_clear_time = time.time() + 2.5
@@ -683,6 +688,10 @@ def run_player_loop(
 
     def fetch_queue(vid: str):
         nonlocal is_fetching
+        if is_playlist_mode and queue:
+            return
+        if is_playlist_mode and not autoplay:
+            return
         is_fetching = True
         try:
             tracks = get_related_tracks(vid, limit=15)
@@ -714,7 +723,7 @@ def run_player_loop(
                     prebuffering_vid = None
 
     # Start background queue only if not populated by a playlist
-    if not initial_queue:
+    if not is_playlist_mode:
         threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
     threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
     threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
@@ -795,14 +804,20 @@ def run_player_loop(
                             queue.insert(0, curr_song)
                             if playlist_index > 1:
                                 playlist_index -= 1
-                            switch_to_song_optimistic(prev_song, status_msg="Previous")
+                            switch_to_song_optimistic(prev_song, status_msg="Previous", is_previous=True)
                             continue
                     elif key in ("n", "N", ">"):
                         if queue:
                             playlist_index += 1
                             target = queue.pop(0)
                             switch_to_song_optimistic(target, status_msg="Next")
-                            if len(queue) < 4 and not is_fetching:
+                            should_fetch = (
+                                not is_fetching and (
+                                    (not is_playlist_mode and len(queue) < 4) or
+                                    (is_playlist_mode and len(queue) == 0 and autoplay)
+                                )
+                            )
+                            if should_fetch:
                                 threading.Thread(target=fetch_queue, args=(target.video_id,), daemon=True).start()
                             continue
                         else:
@@ -831,8 +846,9 @@ def run_player_loop(
                         if search_action:
                             act_type, target, remaining = search_action
                             if act_type == "play_now":
-                                if remaining:
+                                if remaining is not None:
                                     queue = list(remaining)
+                                    is_playlist_mode = bool(playlist_name or remaining)
                                 switch_to_song_optimistic(target, status_msg="Playing")
                                 continue
                     elif key == "up":
@@ -913,6 +929,8 @@ def run_player_loop(
                             queue_notif_clear = time.time() + 1.5
                     elif key in ("enter", "\r", "\n"):
                         if queue and 0 <= queue_selected_idx < len(queue):
+                            if playlist_total:
+                                playlist_index = min(playlist_total, playlist_index + queue_selected_idx + 1)
                             target = queue.pop(queue_selected_idx)
                             if queue_selected_idx >= len(queue):
                                 queue_selected_idx = max(0, len(queue) - 1)
@@ -979,7 +997,13 @@ def run_player_loop(
                     threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
                     message = f"⚡ Instant Next: {curr_song.title}"
                     msg_clear_time = time.time() + 2.5
-                    if len(queue) < 4 and not is_fetching:
+                    should_fetch = (
+                        not is_fetching and (
+                            (not is_playlist_mode and len(queue) < 4) or
+                            (is_playlist_mode and len(queue) == 0 and autoplay)
+                        )
+                    )
+                    if should_fetch:
                         threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
                     continue
 
@@ -1062,7 +1086,13 @@ def run_player_loop(
                             message = f"Autoplaying: {curr_song.title}"
                             msg_clear_time = time.time() + 2.5
 
-                        if len(queue) < 4 and not is_fetching:
+                        should_fetch = (
+                            not is_fetching and (
+                                (not is_playlist_mode and len(queue) < 4) or
+                                (is_playlist_mode and len(queue) == 0 and autoplay)
+                            )
+                        )
+                        if should_fetch:
                             threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
                         continue
                     else:

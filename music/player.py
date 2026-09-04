@@ -230,7 +230,15 @@ class MpvPlayer:
         self._is_eof = False
         self._play_start_time = time.time()
         res = self._send_command(["loadfile", url, "replace"])
+        self.resume()
         return res is not None or self.process_is_alive()
+
+    def stop_track(self) -> None:
+        """Stop current track playback without terminating mpv process."""
+        self._cached_duration = 0.0
+        self._last_time_pos = 0.0
+        self._is_eof = False
+        self._send_command(["stop"])
 
     def append_track(self, url: str) -> bool:
         """Append track to mpv playlist for seamless gapless prebuffering."""
@@ -243,6 +251,7 @@ class MpvPlayer:
         self._last_time_pos = 0.0
         self._play_start_time = time.time()
         res = self._send_command(["playlist-next"])
+        self.resume()
         return res is not None
 
     def get_playlist_pos(self) -> int:
