@@ -18,11 +18,10 @@ curl -fsSL https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.sh | 
 ### 🪟 Windows
 Open **PowerShell** and run:
 ```powershell
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; irm https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 -UseBasicParsing | iex
+irm https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 | iex
 ```
-*(Or if you prefer `curl`: `curl.exe -fsSL https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 | powershell -`)*
 
-> **Done!** Now just type **`music`** and press Enter to start listening.
+> **Done!** Restart your terminal, type **`music`**, and press Enter to start listening.
 
 ---
 

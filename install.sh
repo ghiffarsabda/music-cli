@@ -78,7 +78,13 @@ echo -e "\n${CYAN}→ Setting up isolated environment in ${BOLD}${INSTALL_DIR}${
 mkdir -p "${INSTALL_DIR}"
 mkdir -p "${BIN_DIR}"
 
-python3 -m venv "${INSTALL_DIR}/venv"
+if ! python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null; then
+    if command -v apt-get &>/dev/null; then
+        echo -e "${CYAN}→ Installing python3-venv package...${RESET}"
+        sudo apt-get update -y && sudo apt-get install -y python3-venv python3-pip
+        python3 -m venv "${INSTALL_DIR}/venv"
+    fi
+fi
 
 # 4. Install / Update music-cli (zip archive doesn't require git CLI)
 echo -e "${CYAN}→ Installing music-cli and dependencies...${RESET}"

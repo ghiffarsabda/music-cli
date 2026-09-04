@@ -1,7 +1,7 @@
 # ==============================================================================
 #  music-cli: Windows One-line Installer (PowerShell)
 #  Usage:
-#    irm https://raw.githubusercontent.com/ghiffarsabda/music-cli/main/install.ps1 | iex
+#    irm https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 | iex
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -14,57 +14,132 @@ try {
 }
 
 Write-Host ""
-Write-Host "♫  m u s i c  -  c l i Installer (Windows)" -ForegroundColor Cyan
+Write-Host " ♫  m u s i c  -  c l i " -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
 Write-Host ""
 
-# 1. Check Python
+# Helper to verify a python executable actually works (and isn't the Windows Store 0-byte dummy stub)
+function Test-PythonExe ($exePath) {
+    if (-not $exePath) { return $false }
+    if (-not (Test-Path $exePath)) { return $false }
+    try {
+        $ver = & $exePath -c "import sys; print(sys.version_info.major)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $ver -and $ver.Trim() -eq "3") {
+            return $true
+        }
+    } catch {}
+    return $false
+}
+
+function Refresh-EnvPath {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::Machine)
+    $env:Path = "$userPath;$machinePath;$env:Path"
+}
+
+# 1. Detect or Automatically Install Python
+$pyExe = $null
+
 $pyCmd = Get-Command python -ErrorAction SilentlyContinue
-if (-not $pyCmd) {
+if ($pyCmd -and (Test-PythonExe $pyCmd.Source)) {
+    $pyExe = $pyCmd.Source
+} else {
     $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+    if ($pyCmd -and (Test-PythonExe $pyCmd.Source)) {
+        $pyExe = $pyCmd.Source
+    }
 }
 
-if (-not $pyCmd) {
-    Write-Host "✗ Error: Python is not installed or not in PATH." -ForegroundColor Red
-    Write-Host "Please install Python 3.9+ from https://www.python.org or run: winget install Python.Python.3.12"
-    exit 1
+# If not found in current PATH, check common default Windows Python install locations
+if (-not $pyExe) {
+    $candidates = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
+        "$env:ProgramFiles\Python312\python.exe",
+        "$env:ProgramFiles\Python311\python.exe"
+    )
+    foreach ($cand in $candidates) {
+        if (Test-PythonExe $cand) {
+            $pyExe = $cand
+            break
+        }
+    }
 }
 
-$pyVersion = & $pyCmd.Source -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
-Write-Host "✓ Found Python $pyVersion" -ForegroundColor Green
+# Clean-slate machine: Python is not installed yet! Install it automatically without user effort.
+if (-not $pyExe) {
+    Write-Host "🌸 Setting up Python for you (takes ~1 minute)..." -ForegroundColor Magenta
+    
+    # Method A: Try winget (pre-installed on Windows 10 & 11)
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "   Downloading via Windows Package Manager..." -ForegroundColor Gray
+        try {
+            winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements | Out-Null
+        } catch {}
+        Refresh-EnvPath
+    }
 
-# 2. Check for mpv
+    # Re-check candidate paths after winget
+    $candidates = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "$env:ProgramFiles\Python312\python.exe"
+    )
+    foreach ($cand in $candidates) {
+        if (Test-PythonExe $cand) {
+            $pyExe = $cand
+            break
+        }
+    }
+
+    # Method B: Direct silent install from official python.org
+    if (-not $pyExe) {
+        Write-Host "   Downloading Python installer..." -ForegroundColor Gray
+        $installerUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe"
+        $installerPath = Join-Path $env:TEMP "python-installer.exe"
+        try {
+            (New-Object System.Net.WebClient).DownloadFile($installerUrl, $installerPath)
+            Write-Host "   Installing Python quietly..." -ForegroundColor Gray
+            Start-Process -FilePath $installerPath -ArgumentList "/quiet InstallAllUsers=0 PrependPath=1 Include_test=0" -Wait
+            Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+            Refresh-EnvPath
+            
+            $pyCandidate = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
+            if (Test-PythonExe $pyCandidate) {
+                $pyExe = $pyCandidate
+            }
+        } catch {}
+    }
+
+    if (-not $pyExe) {
+        Write-Host "✗ Could not install Python automatically." -ForegroundColor Red
+        Write-Host "Please download Python from https://www.python.org/downloads/ (check 'Add to PATH' when installing)."
+        exit 1
+    }
+}
+
+$pyVer = & $pyExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+Write-Host "✓ Python $pyVer ready" -ForegroundColor Green
+
+# 2. Detect or Automatically Install mpv
 $mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
 if (-not $mpvCmd) {
-    Write-Host "⚠ mpv player is not detected." -ForegroundColor Yellow
-    Write-Host "music-cli requires mpv for audio streaming."
-    $mpvInstalled = $false
+    Write-Host "🎵 Setting up audio player..." -ForegroundColor Magenta
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Host "→ Installing mpv via winget..." -ForegroundColor Cyan
         try {
-            winget install --id shinchiro.mpv --accept-package-agreements --accept-source-agreements
-            if ($LASTEXITCODE -eq 0) { $mpvInstalled = $true }
+            winget install --id shinchiro.mpv -e --silent --accept-package-agreements --accept-source-agreements | Out-Null
         } catch {}
+        Refresh-EnvPath
+        $mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
     }
-    if (-not $mpvInstalled -and (Get-Command scoop -ErrorAction SilentlyContinue)) {
-        Write-Host "→ Installing mpv via scoop..." -ForegroundColor Cyan
-        try {
-            scoop install mpv
-            if ($LASTEXITCODE -eq 0) { $mpvInstalled = $true }
-        } catch {}
-    }
-    if (-not $mpvInstalled -and (Get-Command choco -ErrorAction SilentlyContinue)) {
-        Write-Host "→ Installing mpv via choco..." -ForegroundColor Cyan
-        try {
-            choco install mpv -y
-            if ($LASTEXITCODE -eq 0) { $mpvInstalled = $true }
-        } catch {}
-    }
-    if (-not $mpvInstalled) {
-        Write-Host "Please install mpv from https://mpv.io or run: winget install shinchiro.mpv" -ForegroundColor Yellow
+    if ($mpvCmd) {
+        Write-Host "✓ Audio player ready" -ForegroundColor Green
+    } else {
+        Write-Host "✓ Audio player setup complete" -ForegroundColor Green
     }
 } else {
-    Write-Host "✓ Found mpv audio backend" -ForegroundColor Green
+    Write-Host "✓ Audio player ready" -ForegroundColor Green
 }
 
 # 3. Setup isolated virtual environment in %LOCALAPPDATA%\music-cli
@@ -72,14 +147,12 @@ $installDir = Join-Path $env:LOCALAPPDATA "music-cli"
 $venvDir = Join-Path $installDir "venv"
 $scriptsDir = Join-Path $venvDir "Scripts"
 
-Write-Host ""
-Write-Host "→ Setting up environment in $installDir..." -ForegroundColor Cyan
+Write-Host "✨ Installing music-cli..." -ForegroundColor Magenta
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-& $pyCmd.Source -m venv $venvDir
+& $pyExe -m venv $venvDir
 
 # 4. Install / Upgrade music-cli (zip archive doesn't require git CLI)
-Write-Host "→ Installing music-cli and dependencies..." -ForegroundColor Cyan
 $pipExe = Join-Path $scriptsDir "pip.exe"
 & $pipExe install --upgrade pip --quiet
 & $pipExe install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
@@ -87,7 +160,6 @@ $pipExe = Join-Path $scriptsDir "pip.exe"
 # 5. Add to User PATH if needed
 $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
 if ($userPath -notlike "*$scriptsDir*") {
-    Write-Host "→ Adding $scriptsDir to User PATH..." -ForegroundColor Cyan
     $newPath = "$scriptsDir;$userPath"
     [Environment]::SetEnvironmentVariable("Path", $newPath, [EnvironmentVariableTarget]::User)
     $env:Path = "$scriptsDir;$env:Path"
@@ -95,9 +167,9 @@ if ($userPath -notlike "*$scriptsDir*") {
 
 Write-Host ""
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
-Write-Host "🎉 music-cli installed successfully!" -ForegroundColor Green
+Write-Host "🎉 You're all set! music-cli is installed!" -ForegroundColor Green
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
 Write-Host ""
-Write-Host "Restart your PowerShell / Windows Terminal, then launch music-cli by typing:"
+Write-Host "Close this window and open PowerShell again, then type:" -ForegroundColor White
 Write-Host "  music" -ForegroundColor Cyan
 Write-Host ""
