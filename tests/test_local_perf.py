@@ -45,7 +45,7 @@ from music.search import SongItem
 
 def test_schema_and_connection_initialization():
     """Test 1: Verify database schema, triggers, indices, and WAL mode initialization."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "library.db"
 
         # Initialize schema
@@ -89,6 +89,7 @@ def test_schema_and_connection_initialization():
         # 5. Verify idempotency on repeated initialization
         conn2 = init_library_db(db_path=db_path)
         assert conn2 is not None
+        conn2.close()
         conn.close()
 
     print("✓ Test 1 Passed: Database schema, triggers, indices, and WAL mode initialized successfully.")
@@ -96,9 +97,9 @@ def test_schema_and_connection_initialization():
 
 def test_fts5_bm25_search_and_ranking():
     """Test 2: Verify FTS5 exact/prefix matching and BM25 weighted ranking."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "library.db"
-        init_library_db(db_path=db_path)
+        init_library_db(db_path=db_path).close()
 
         # Insert 3 tracks: title match vs artist match vs album match
         track_title = SongItem(
@@ -166,9 +167,9 @@ def test_fts5_bm25_search_and_ranking():
 
 def test_token_sanitization_and_injection_defense():
     """Test 3: Verify token sanitization against SQLite syntax errors and operator injections."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "library.db"
-        init_library_db(db_path=db_path)
+        init_library_db(db_path=db_path).close()
 
         # Insert track with special characters
         acdc_song = SongItem(
@@ -223,10 +224,10 @@ def test_token_sanitization_and_injection_defense():
 
 def test_history_migration_idempotency_and_data_integrity():
     """Test 4: Verify seamless, idempotent migration of legacy history.json."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "library.db"
         hist_path = Path(tmpdir) / "history.json"
-        init_library_db(db_path=db_path)
+        init_library_db(db_path=db_path).close()
 
         # Non-existent history file returns 0
         assert migrate_history_json_if_needed(db_path=db_path, history_file=hist_path) == 0
@@ -318,9 +319,9 @@ def test_history_migration_idempotency_and_data_integrity():
 
 def test_typo_tolerant_fuzzy_matching():
     """Test 5: Verify typo tolerance for misspellings, sliding windows, and diacritics."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "library.db"
-        init_library_db(db_path=db_path)
+        init_library_db(db_path=db_path).close()
 
         catalog = [
             SongItem("Creep", "Radiohead", "Pablo Honey", "03:58", 238, "rad1", "http1"),
@@ -365,9 +366,9 @@ def test_typo_tolerant_fuzzy_matching():
 
 def test_hybrid_search_workflow():
     """Test 6: Verify 3-tier hybrid search (empty -> recent; non-empty -> FTS5; fallback -> fuzzy)."""
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir:
         db_path = Path(tmpdir) / "library.db"
-        init_library_db(db_path=db_path)
+        init_library_db(db_path=db_path).close()
 
         song1 = SongItem("Starboy", "The Weeknd", "Starboy", "03:50", 230, "s1", "http1")
         song2 = SongItem("Yellow", "Coldplay", "Parachutes", "04:29", 269, "s2", "http2")
