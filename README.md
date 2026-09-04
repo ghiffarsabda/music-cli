@@ -22,6 +22,32 @@ No account or login is required to play songs. If you have a **YouTube Music / Y
 
 ---
 
+## 📦 Installation
+
+### 🍎 macOS & 🐧 Linux (One-line installer)
+
+Paste this into your terminal and hit Enter:
+```bash
+curl -fsSL https://raw.githubusercontent.com/ghiffarsabda/music-cli/main/install.sh | bash
+```
+> *This automatically sets up an isolated environment in `~/.local/share/music-cli`, checks for `mpv`, links the `music` command to `~/.local/bin`, and updates your PATH if needed.*
+
+### 🪟 Windows (PowerShell)
+
+Open PowerShell and run:
+```powershell
+irm https://raw.githubusercontent.com/ghiffarsabda/music-cli/main/install.ps1 | iex
+```
+
+### 🐍 Alternative: Using `pipx` (All Platforms)
+
+If you have `pipx` installed:
+```bash
+pipx install git+https://github.com/ghiffarsabda/music-cli.git
+```
+
+---
+
 ## 🚀 Quick Start
 
 ### 0. Interactive Home Screen (OpenCode Style)
