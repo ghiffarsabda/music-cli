@@ -374,15 +374,18 @@ def handle_stop_playback() -> None:
 
 def launch_home_session() -> None:
     """Run interactive OpenCode-styled home search session loop."""
+    staged_queue: List[Any] = []
     while True:
-        action = run_home_view()
+        action = run_home_view(now_playing_queue=staged_queue)
         if not action:
             break
-        act_type, target = action
-        if act_type == "track":
+        act_type, target = action[:2]
+        if act_type in ("track", "play_now"):
             vol = get_config_val("volume", 100)
             player = MpvPlayer(initial_volume=vol)
-            run_player_loop(target, player)
+            rem = action[2] if len(action) > 2 and action[2] else (staged_queue if staged_queue else None)
+            staged_queue = []
+            run_player_loop(target, player, initial_queue=rem)
         elif act_type in ("container_track", "playlist_track"):
             vol = get_config_val("volume", 100)
             player = MpvPlayer(initial_volume=vol)
