@@ -159,6 +159,23 @@ def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
                     data=s,
                 )
             )
+
+    if filter_mode in ("All", "Offline"):
+        try:
+            from music.offline import list_offline_tracks
+            off_tracks = list_offline_tracks(clean_q)[:4]
+            for s in off_tracks:
+                local_items.append(
+                    DropdownItem(
+                        kind="track",
+                        title=s.title,
+                        subtitle=s.artist,
+                        extra=f"💾 {s.duration or '--:--'}",
+                        data=s,
+                    )
+                )
+        except Exception:
+            pass
     return local_items
 
 
@@ -386,6 +403,61 @@ def fetch_dropdown_results(
                             data=p,
                         )
                     )
+        except Exception:
+            pass
+
+    elif filter_mode == "Offline":
+        try:
+            from music.offline import list_offline_tracks, list_offline_collections
+            for t in list_offline_tracks(clean_q)[:limit]:
+                if t.video_id not in seen_ids:
+                    seen_ids.add(t.video_id)
+                    items.append(
+                        DropdownItem(
+                            kind="track",
+                            title=t.title,
+                            subtitle=t.artist,
+                            extra=f"💾 {t.duration or '--:--'}",
+                            data=t,
+                        )
+                    )
+            for p in list_offline_collections("playlist"):
+                if clean_q.lower() in p["title"].lower() or clean_q.lower() in p.get("author", "").lower():
+                    if p["id"] not in seen_ids:
+                        seen_ids.add(p["id"])
+                        items.append(
+                            DropdownItem(
+                                kind="playlist",
+                                title=p["title"],
+                                subtitle=p.get("author", "Offline Playlist"),
+                                extra=f"💾 {p.get('track_count', 0)} tracks",
+                                data=PlaylistItem(
+                                    title=p["title"],
+                                    playlist_id=p["id"],
+                                    author=p.get("author", "Offline Playlist"),
+                                    track_count=p.get("track_count", 0),
+                                    url="",
+                                ),
+                            )
+                        )
+            for a in list_offline_collections("album"):
+                if clean_q.lower() in a["title"].lower() or clean_q.lower() in a.get("author", "").lower():
+                    if a["id"] not in seen_ids:
+                        seen_ids.add(a["id"])
+                        items.append(
+                            DropdownItem(
+                                kind="album",
+                                title=a["title"],
+                                subtitle=a.get("author", "Offline Album"),
+                                extra="💾 Album",
+                                data=AlbumItem(
+                                    title=a["title"],
+                                    browse_id=a["id"],
+                                    artist=a.get("author", "Offline Album"),
+                                    year="",
+                                ),
+                            )
+                        )
         except Exception:
             pass
 
@@ -729,7 +801,7 @@ def run_home_view(
     console = Console()
 
     query = ""
-    filter_modes = ["All", "Tracks", "Albums", "Playlists"]
+    filter_modes = ["All", "Tracks", "Albums", "Playlists", "Offline"]
     filter_idx = 0
     selected_idx = 0
     scroll_offset = 0

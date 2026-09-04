@@ -302,6 +302,8 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "mpv_path": "",
     "yt_dlp_path": detect_executable("yt-dlp", ["~/.local/bin/yt-dlp", "/usr/bin/yt-dlp"]),
     "node_path": detect_executable("node", ["~/.local/bin/node", "/usr/bin/node"]),
+    "download_dir": str(Path.home() / ".local" / "share" / "music-cli" / "downloads"),
+    "offline_mode": False,
 }
 
 

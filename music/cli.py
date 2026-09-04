@@ -51,6 +51,7 @@ def handle_playlist_query(
     autoplay: Optional[bool] = None,
     ad_blocker: Optional[bool] = None,
     show_lyrics: Optional[bool] = None,
+    offline: bool = False,
 ) -> None:
     """Search for or load a playlist, prompt track selection if requested, and stream."""
     import random
@@ -59,7 +60,26 @@ def handle_playlist_query(
     p_item = None
     tracks = []
 
-    if is_playlist_url(clean_q):
+    if offline:
+        from music.offline import get_offline_collection_tracks, list_offline_collections
+        col, tracks = get_offline_collection_tracks(clean_q)
+        if not tracks:
+            for p in list_offline_collections("playlist"):
+                if clean_q.lower() in p["title"].lower():
+                    col, tracks = get_offline_collection_tracks(p["id"])
+                    break
+        if not tracks:
+            console.print(f"[red]No offline playlist found matching '{clean_q}'.[/red]")
+            return
+        p_title = col.get("title", "Offline Playlist") if col else "Offline Playlist"
+        p_item = PlaylistItem(
+            title=p_title,
+            playlist_id=col.get("id", ""),
+            author=col.get("author", "Offline Collection"),
+            track_count=len(tracks),
+            url="",
+        )
+    elif is_playlist_url(clean_q):
         console.print("[cyan]Loading playlist from URL...[/cyan]")
         p_item, tracks = get_playlist_tracks(clean_q)
     else:
@@ -117,6 +137,7 @@ def handle_album_query(
     autoplay: Optional[bool] = None,
     ad_blocker: Optional[bool] = None,
     show_lyrics: Optional[bool] = None,
+    offline: bool = False,
 ) -> None:
     """Search for or load an album, prompt track selection if requested, and stream."""
     clean = query.strip()
@@ -124,7 +145,25 @@ def handle_album_query(
     album_item = None
     tracks: List[SongItem] = []
 
-    if album_id or clean.startswith("MPREb_"):
+    if offline:
+        from music.offline import get_offline_collection_tracks, list_offline_collections
+        col, tracks = get_offline_collection_tracks(clean)
+        if not tracks:
+            for a in list_offline_collections("album"):
+                if clean.lower() in a["title"].lower():
+                    col, tracks = get_offline_collection_tracks(a["id"])
+                    break
+        if not tracks:
+            console.print(f"[red]No offline album found matching '{clean}'.[/red]")
+            return
+        album_title = col.get("title", "Offline Album") if col else "Offline Album"
+        album_item = AlbumItem(
+            title=album_title,
+            browse_id=col.get("id", ""),
+            artist=col.get("author", "Offline Collection"),
+            track_count=len(tracks),
+        )
+    elif album_id or clean.startswith("MPREb_"):
         with console.status(f"[bold cyan]Fetching album {clean}...[/bold cyan]"):
             album_item, tracks = get_album_tracks(album_id or clean)
     else:
@@ -187,8 +226,33 @@ def handle_play_query(
     autoplay: Optional[bool] = None,
     ad_blocker: Optional[bool] = None,
     show_lyrics: Optional[bool] = None,
+    offline: bool = False,
 ) -> None:
     """Search for query and start playback."""
+    if offline:
+        from music.offline import list_offline_tracks
+        results = list_offline_tracks(query)
+        if not results:
+            console.print(f"[red]No offline downloaded tracks found matching '{query}'.[/red]")
+            console.print("[dim]Tip: Use 'music download <song>' to download songs for offline playback.[/dim]")
+            return
+        if select_menu and len(results) > 1:
+            selected_song = prompt_song_selection(results)
+            if not selected_song:
+                return
+        else:
+            selected_song = results[0]
+        vol = get_config_val("volume", 100)
+        player = MpvPlayer(initial_volume=vol)
+        run_player_loop(
+            selected_song,
+            player,
+            autoplay=autoplay,
+            ad_blocker=ad_blocker,
+            show_lyrics=show_lyrics,
+        )
+        return
+
     if is_playlist_url(query):
         handle_playlist_query(
             query,
@@ -196,6 +260,7 @@ def handle_play_query(
             autoplay=autoplay,
             ad_blocker=ad_blocker,
             show_lyrics=show_lyrics,
+            offline=offline,
         )
         return
 
@@ -372,6 +437,324 @@ def handle_stop_playback() -> None:
         console.print("[yellow]No active background music playback found.[/yellow]")
 
 
+def handle_download(args: argparse.Namespace) -> None:
+    """Download songs, playlists, or albums to local storage for 100% offline playback."""
+    from music.offline import (
+        download_album_by_query,
+        download_playlist_by_query,
+        download_song,
+        is_track_offline,
+    )
+
+    query_parts = list(args.query) if getattr(args, "query", None) else []
+    if not query_parts:
+        console.print("[red]Please specify a song, playlist, or album to download.[/red]")
+        return
+
+    first = query_parts[0].lower()
+    is_pl = getattr(args, "playlist", False)
+    is_alb = getattr(args, "album", False)
+    select_menu = getattr(args, "select", False)
+
+    if first in ("playlist", "pl") and len(query_parts) > 1:
+        is_pl = True
+        query_parts = query_parts[1:]
+    elif first in ("album", "alb") and len(query_parts) > 1:
+        is_alb = True
+        query_parts = query_parts[1:]
+    elif first in ("song", "track") and len(query_parts) > 1:
+        query_parts = query_parts[1:]
+
+    raw_query = " ".join(query_parts).strip()
+
+    if is_pl or is_playlist_url(raw_query):
+        download_playlist_by_query(raw_query, console=console)
+        return
+
+    if is_alb or is_album_url(raw_query):
+        download_album_by_query(raw_query, console=console)
+        return
+
+    if is_youtube_url(raw_query):
+        console.print("[cyan]Resolving direct track URL...[/cyan]")
+        song = resolve_direct_item(raw_query)
+        if not song:
+            console.print("[red]Could not resolve track URL.[/red]")
+            return
+    else:
+        console.print(f"[cyan]Searching for:[/cyan] [bold white]{raw_query}[/bold white]...")
+        results = search_music(raw_query, limit=5)
+        if not results:
+            console.print(f"[red]No tracks found matching '{raw_query}'.[/red]")
+            return
+
+        if select_menu:
+            song = prompt_song_selection(results)
+            if not song:
+                return
+        else:
+            song = results[0]
+
+    if is_track_offline(song.video_id):
+        console.print(f"[yellow]Track is already downloaded locally:[/yellow] [bold white]{song.title}[/bold white]")
+        return
+
+    with console.status(f"[bold cyan]Downloading '{song.title}' for offline playback...[/bold cyan]"):
+        ok, msg, fpath = download_song(song, console=console, show_status=False)
+
+    if ok:
+        console.print(f"[bold green]{msg}[/bold green]")
+        console.print(f"[dim]Saved to: {fpath}[/dim]")
+    else:
+        console.print(f"[bold red]{msg}[/bold red]")
+
+
+def handle_offline(args: argparse.Namespace) -> None:
+    """Manage, list, and play offline downloaded songs and collections."""
+    from rich import box
+    from music.offline import (
+        clear_all_offline_data,
+        delete_offline_collection,
+        delete_offline_track,
+        get_offline_collection_tracks,
+        get_offline_stats,
+        list_offline_collections,
+        list_offline_tracks,
+    )
+
+    action = getattr(args, "action", "list") or "list"
+    target_words = getattr(args, "target", [])
+    target = " ".join(target_words).strip() if target_words else ""
+
+    if action == "status":
+        stats = get_offline_stats()
+        table = Table(title="[bold cyan]Offline Music Storage Status[/bold cyan]", border_style="cyan")
+        table.add_column("Property", style="bold yellow")
+        table.add_column("Value", style="white")
+        table.add_row("Total Downloaded Tracks", str(stats["total_tracks"]))
+        table.add_row("Total Playlists", str(stats["total_playlists"]))
+        table.add_row("Total Albums", str(stats["total_albums"]))
+        table.add_row("Storage Used", stats["total_size_str"])
+        table.add_row("Downloads Directory", stats["downloads_dir"])
+        console.print(table)
+        return
+
+    if action == "clear":
+        try:
+            confirm = input("Are you sure you want to delete ALL offline downloaded songs? (y/N): ").strip().lower()
+            if confirm in ("y", "yes"):
+                cnt = clear_all_offline_data(delete_files=True)
+                console.print(f"[bold green]✓ Cleared {cnt} offline tracks and collections.[/bold green]")
+            else:
+                console.print("[yellow]Canceled.[/yellow]")
+        except (KeyboardInterrupt, EOFError):
+            pass
+        return
+
+    if action == "remove":
+        if not target:
+            console.print("[red]Please specify a track title, video ID, or collection to remove.[/red]")
+            return
+        if delete_offline_track(target):
+            console.print(f"[bold green]✓ Removed offline track '{target}'.[/bold green]")
+            return
+        if delete_offline_collection(target, delete_tracks=False):
+            console.print(f"[bold green]✓ Removed offline collection '{target}'.[/bold green]")
+            return
+        tracks = list_offline_tracks(target)
+        if tracks:
+            delete_offline_track(tracks[0].video_id)
+            console.print(f"[bold green]✓ Removed offline track: {tracks[0].title}[/bold green]")
+            return
+        console.print(f"[red]No offline track or collection found matching '{target}'.[/red]")
+        return
+
+    if action in ("play", "search"):
+        tracks = list_offline_tracks(target) if target else list_offline_tracks()
+        if not tracks:
+            console.print("[yellow]No matching offline tracks downloaded yet.[/yellow]")
+            console.print("[dim]Use 'music download <song>' to download songs for offline playback.[/dim]")
+            return
+
+        if action == "search":
+            table = Table(title=f"[bold cyan]Offline Tracks Matching '{target}'[/bold cyan]", border_style="cyan")
+            table.add_column("#", style="dim", justify="right", width=3)
+            table.add_column("Title", style="bold white")
+            table.add_column("Artist", style="yellow")
+            table.add_column("Duration", style="green", justify="right")
+            for i, t in enumerate(tracks, 1):
+                table.add_row(str(i), t.title, t.artist, t.duration)
+            console.print(table)
+            return
+
+        if len(tracks) > 1 and getattr(args, "select", False):
+            chosen = prompt_song_selection(tracks)
+            if not chosen:
+                return
+            start_song = chosen
+            idx = tracks.index(chosen)
+            queue = tracks[idx + 1:]
+        else:
+            start_song = tracks[0]
+            queue = tracks[1:]
+
+        if getattr(args, "shuffle", False):
+            import random
+            random.shuffle(queue)
+
+        vol = get_config_val("volume", 100)
+        player = MpvPlayer(initial_volume=vol)
+        run_player_loop(
+            start_song,
+            player,
+            initial_queue=queue,
+            playlist_name="Offline Library",
+        )
+        return
+
+    if action == "playlist":
+        if not target:
+            playlists = list_offline_collections("playlist")
+            if not playlists:
+                console.print("[yellow]No offline playlists downloaded.[/yellow]")
+                return
+            table = Table(title="[bold cyan]Offline Playlists[/bold cyan]", border_style="cyan")
+            table.add_column("#", style="dim", width=3)
+            table.add_column("Title", style="bold white")
+            table.add_column("Author", style="yellow")
+            table.add_column("Tracks", style="cyan", justify="right")
+            for i, p in enumerate(playlists, 1):
+                table.add_row(str(i), p["title"], p.get("author", ""), str(p.get("track_count", 0)))
+            console.print(table)
+            return
+
+        col, tracks = get_offline_collection_tracks(target)
+        if not tracks:
+            for p in list_offline_collections("playlist"):
+                if target.lower() in p["title"].lower():
+                    col, tracks = get_offline_collection_tracks(p["id"])
+                    break
+        if not tracks:
+            console.print(f"[red]No offline playlist found matching '{target}'.[/red]")
+            return
+
+        if getattr(args, "shuffle", False):
+            import random
+            random.shuffle(tracks)
+
+        start_song = tracks[0]
+        queue = tracks[1:]
+        vol = get_config_val("volume", 100)
+        player = MpvPlayer(initial_volume=vol)
+        run_player_loop(
+            start_song,
+            player,
+            initial_queue=queue,
+            playlist_name=f"Offline: {col.get('title', 'Playlist') if col else 'Playlist'}",
+        )
+        return
+
+    if action == "album":
+        if not target:
+            albums = list_offline_collections("album")
+            if not albums:
+                console.print("[yellow]No offline albums downloaded.[/yellow]")
+                return
+            table = Table(title="[bold cyan]Offline Albums[/bold cyan]", border_style="cyan")
+            table.add_column("#", style="dim", width=3)
+            table.add_column("Title", style="bold white")
+            table.add_column("Artist", style="yellow")
+            table.add_column("Tracks", style="cyan", justify="right")
+            for i, a in enumerate(albums, 1):
+                table.add_row(str(i), a["title"], a.get("author", ""), str(a.get("track_count", 0)))
+            console.print(table)
+            return
+
+        col, tracks = get_offline_collection_tracks(target)
+        if not tracks:
+            for a in list_offline_collections("album"):
+                if target.lower() in a["title"].lower():
+                    col, tracks = get_offline_collection_tracks(a["id"])
+                    break
+        if not tracks:
+            console.print(f"[red]No offline album found matching '{target}'.[/red]")
+            return
+
+        if getattr(args, "shuffle", False):
+            import random
+            random.shuffle(tracks)
+
+        start_song = tracks[0]
+        queue = tracks[1:]
+        vol = get_config_val("volume", 100)
+        player = MpvPlayer(initial_volume=vol)
+        run_player_loop(
+            start_song,
+            player,
+            initial_queue=queue,
+            playlist_name=f"Offline Album: {col.get('title', 'Album') if col else 'Album'}",
+        )
+        return
+
+    # Default action: list
+    tracks = list_offline_tracks()
+    playlists = list_offline_collections("playlist")
+    albums = list_offline_collections("album")
+    stats = get_offline_stats()
+
+    if not tracks and not playlists and not albums:
+        console.print("[yellow]No songs downloaded for offline mode yet.[/yellow]")
+        console.print("\n[bold cyan]How to download music for offline play:[/bold cyan]")
+        console.print("  • Download a song:     [bold white]music download \"Song Title\"[/bold white]")
+        console.print("  • Download a playlist: [bold white]music download playlist \"Playlist Name\"[/bold white]")
+        console.print("  • Download an album:   [bold white]music download album \"Album Name\"[/bold white]")
+        console.print("  • Press [bold white]'D'[/bold white] in the player while listening to save the current song!")
+        return
+
+    table = Table(
+        title=f"[bold bright_green]💾 Offline Library ({stats['total_tracks']} tracks • {stats['total_size_str']})[/bold bright_green]",
+        border_style="bright_green",
+        box=box.ROUNDED,
+    )
+    table.add_column("#", style="dim", justify="right", width=3)
+    table.add_column("Title", style="bold white", min_width=24)
+    table.add_column("Artist", style="yellow", min_width=18)
+    table.add_column("Album", style="dim")
+    table.add_column("Duration", style="cyan", justify="right", width=8)
+
+    for i, t in enumerate(tracks[:30], 1):
+        table.add_row(str(i), t.title, t.artist, t.album or "--", t.duration)
+
+    console.print(table)
+    if len(tracks) > 30:
+        console.print(f"[dim]... and {len(tracks) - 30} more tracks.[/dim]")
+
+    if playlists:
+        p_table = Table(title="[bold cyan]Offline Playlists[/bold cyan]", border_style="cyan", box=box.ROUNDED)
+        p_table.add_column("#", style="dim", width=3)
+        p_table.add_column("Playlist", style="bold white")
+        p_table.add_column("Tracks", style="cyan", justify="right")
+        for i, p in enumerate(playlists, 1):
+            p_table.add_row(str(i), p["title"], str(p.get("track_count", 0)))
+        console.print(p_table)
+
+    if albums:
+        a_table = Table(title="[bold cyan]Offline Albums[/bold cyan]", border_style="cyan", box=box.ROUNDED)
+        a_table.add_column("#", style="dim", width=3)
+        a_table.add_column("Album", style="bold white")
+        a_table.add_column("Artist", style="yellow")
+        a_table.add_column("Tracks", style="cyan", justify="right")
+        for i, a in enumerate(albums, 1):
+            a_table.add_row(str(i), a["title"], a.get("author", ""), str(a.get("track_count", 0)))
+        console.print(a_table)
+
+    console.print(
+        "\n[dim]Commands: [bold white]music offline play [name][/bold white] to play • "
+        "[bold white]music offline playlist [name][/bold white] • "
+        "[bold white]music offline remove [name][/bold white][/dim]"
+    )
+
+
 def launch_home_session() -> None:
     """Run interactive OpenCode-styled home search session loop."""
     staged_queue: List[Any] = []
@@ -426,19 +809,22 @@ def main() -> None:
     # Direct query convenience:
     # If the first argument is not a flag or recognized subcommand,
     # treat all non-flag arguments as a search query!
-    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "album", "home", "help", "stop", "kill"}
+    subcommands = {"login", "logout", "config", "history", "search", "play", "url", "playlist", "album", "home", "help", "stop", "kill", "download", "offline"}
 
     if raw_args and not raw_args[0].startswith("-") and raw_args[0] not in subcommands:
-        # Separate optional flags like -s / --select, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics, --shuffle
+        # Separate optional flags like -s / --select, --offline, --no-autoplay, --autoplay, --no-adblock, --adblock, --no-lyrics, --lyrics, --shuffle
         select_menu = False
         autoplay = None
         ad_blocker = None
         show_lyrics = None
         shuffle = False
+        offline = False
         words = []
         for a in raw_args:
             if a in ("-s", "--select"):
                 select_menu = True
+            elif a in ("--offline", "-o"):
+                offline = True
             elif a == "--no-autoplay":
                 autoplay = False
             elif a == "--autoplay":
@@ -465,6 +851,7 @@ def main() -> None:
                     autoplay=autoplay,
                     ad_blocker=ad_blocker,
                     show_lyrics=show_lyrics,
+                    offline=offline,
                 )
             else:
                 handle_play_query(
@@ -473,6 +860,7 @@ def main() -> None:
                     autoplay=autoplay,
                     ad_blocker=ad_blocker,
                     show_lyrics=show_lyrics,
+                    offline=offline,
                 )
             return
 
@@ -498,6 +886,7 @@ Examples:
     p_play = subparsers.add_parser("play", help="Search and stream a track")
     p_play.add_argument("query", nargs="+", help="Song title or query to search")
     p_play.add_argument("-s", "--select", action="store_true", help="Show interactive search picker")
+    p_play.add_argument("--offline", "-o", action="store_true", help="Play only from downloaded offline tracks")
     p_play.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
     p_play.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
     p_play.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
@@ -508,6 +897,7 @@ Examples:
     p_search = subparsers.add_parser("search", help="Search YouTube Music and select from list")
     p_search.add_argument("query", nargs="+", help="Song or playlist query to search")
     p_search.add_argument("-p", "--playlist", action="store_true", help="Search for playlists instead of individual tracks")
+    p_search.add_argument("--offline", "-o", action="store_true", help="Search only downloaded offline tracks")
     p_search.add_argument("--no-autoplay", action="store_true", help="Disable autoplay for this session")
     p_search.add_argument("--autoplay", action="store_true", help="Force enable autoplay for this session")
     p_search.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
@@ -520,6 +910,7 @@ Examples:
     p_plist.add_argument("query", nargs="+", help="Playlist name or direct playlist URL")
     p_plist.add_argument("-s", "--select", action="store_true", help="Select starting track from playlist table")
     p_plist.add_argument("--shuffle", action="store_true", help="Shuffle playlist tracks")
+    p_plist.add_argument("--offline", "-o", action="store_true", help="Stream from local offline playlists")
     p_plist.add_argument("--no-autoplay", action="store_true", help="Stop playback when playlist ends")
     p_plist.add_argument("--autoplay", action="store_true", help="Continue radio after playlist ends")
     p_plist.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
@@ -532,6 +923,7 @@ Examples:
     p_alb.add_argument("query", nargs="+", help="Album name, artist, or YouTube Music album browse URL")
     p_alb.add_argument("-s", "--select", action="store_true", help="Select starting track from album table")
     p_alb.add_argument("--shuffle", action="store_true", help="Shuffle album tracks")
+    p_alb.add_argument("--offline", "-o", action="store_true", help="Stream from local offline albums")
     p_alb.add_argument("--no-autoplay", action="store_true", help="Stop playback when album ends")
     p_alb.add_argument("--autoplay", action="store_true", help="Continue radio after album ends")
     p_alb.add_argument("--no-adblock", action="store_true", help="Disable ad & sponsor blocking")
@@ -547,6 +939,26 @@ Examples:
     p_url.add_argument("--adblock", action="store_true", help="Force enable ad & sponsor blocking")
     p_url.add_argument("--no-lyrics", action="store_true", help="Disable synced lyrics display")
     p_url.add_argument("--lyrics", action="store_true", help="Force enable synced lyrics display")
+
+    # download subcommand
+    p_dl = subparsers.add_parser("download", help="Download songs, playlists, or albums for offline playback")
+    p_dl.add_argument("query", nargs="+", help="Song title, playlist, album, or direct URL to download")
+    p_dl.add_argument("-p", "--playlist", action="store_true", help="Download as playlist")
+    p_dl.add_argument("-a", "--album", action="store_true", help="Download as album")
+    p_dl.add_argument("-s", "--select", action="store_true", help="Select from search results before downloading")
+
+    # offline subcommand
+    p_off = subparsers.add_parser("offline", help="Manage and play offline downloaded media")
+    p_off.add_argument(
+        "action",
+        nargs="?",
+        choices=["list", "play", "playlist", "album", "search", "remove", "clear", "status"],
+        default="list",
+        help="Action: list (default), play, playlist, album, search, remove, clear, status",
+    )
+    p_off.add_argument("target", nargs="*", help="Query, title, video ID, or collection name")
+    p_off.add_argument("-s", "--select", action="store_true", help="Select starting track from list")
+    p_off.add_argument("--shuffle", action="store_true", help="Shuffle offline playback")
 
     # login subcommand
     p_login = subparsers.add_parser("login", help="Configure YouTube authentication (skip ads)")
@@ -583,10 +995,15 @@ Examples:
         handle_stop_playback()
     elif args.command == "home":
         launch_home_session()
+    elif args.command == "download":
+        handle_download(args)
+    elif args.command == "offline":
+        handle_offline(args)
     elif args.command == "playlist":
         query = " ".join(args.query).strip()
         select_track = getattr(args, "select", False)
         shuf = getattr(args, "shuffle", False)
+        off = getattr(args, "offline", False)
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
         lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
@@ -597,11 +1014,13 @@ Examples:
             autoplay=ap,
             ad_blocker=adb,
             show_lyrics=lyr,
+            offline=off,
         )
     elif args.command == "album":
         query = " ".join(args.query).strip()
         select_track = getattr(args, "select", False)
         shuf = getattr(args, "shuffle", False)
+        off = getattr(args, "offline", False)
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
         lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
@@ -612,10 +1031,12 @@ Examples:
             autoplay=ap,
             ad_blocker=adb,
             show_lyrics=lyr,
+            offline=off,
         )
     elif args.command in ("play", "search"):
         query = " ".join(args.query).strip()
         select_menu = getattr(args, "select", False) or args.command == "search"
+        off = getattr(args, "offline", False)
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)
         lyr = False if getattr(args, "no_lyrics", False) else (True if getattr(args, "lyrics", False) else None)
@@ -626,9 +1047,17 @@ Examples:
                 autoplay=ap,
                 ad_blocker=adb,
                 show_lyrics=lyr,
+                offline=off,
             )
         else:
-            handle_play_query(query, select_menu=select_menu, autoplay=ap, ad_blocker=adb, show_lyrics=lyr)
+            handle_play_query(
+                query,
+                select_menu=select_menu,
+                autoplay=ap,
+                ad_blocker=adb,
+                show_lyrics=lyr,
+                offline=off,
+            )
     elif args.command == "url":
         ap = False if getattr(args, "no_autoplay", False) else (True if getattr(args, "autoplay", False) else None)
         adb = False if getattr(args, "no_adblock", False) else (True if getattr(args, "adblock", False) else None)

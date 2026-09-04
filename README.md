@@ -89,6 +89,7 @@ While music is playing, control everything using your keyboard:
 | <kbd>→</kbd> / <kbd>←</kbd> | Fast-forward / rewind by **5 seconds** |
 | <kbd>+</kbd> / <kbd>-</kbd> | Increase / decrease volume by **5%** |
 | <kbd>M</kbd> | **Mute / Unmute** |
+| <kbd>D</kbd> | **Download current song** to offline storage |
 | <kbd>Q</kbd> | **Quit** and close the player |
 
 ### 🎶 Managing the Queue
@@ -104,10 +105,65 @@ The **Up Next Queue** is always visible right below your player box:
 ## ✨ Features You'll Love
 
 - 🛡️ **Built-in Ad Blocker**: Blocks annoying YouTube video ads automatically. It even skips sponsored promos and non-music talking intros inside songs.
+- 💾 **Complete Offline Mode**: Download individual songs, full playlists, and albums with synchronized lyrics. Play music anywhere with 0ms buffering, even without an internet connection!
 - 🎤 **Live Karaoke Lyrics**: Real-time synchronized scrolling lyrics highlight line-by-line as the artist sings.
 - ⚡ **Lightning Fast & Lightweight**: Uses virtually no memory or CPU compared to opening a heavy web browser tab.
-- 🔒 **100% Private & Local**: Your listening history is saved only on your own computer. It is never tracked or sent to the cloud.
-- 📴 **Offline-First Search**: Previously played songs show up instantly (0ms) as you type, even before web results finish loading.
+- 🔒 **100% Private & Local**: Your listening history and offline library are saved only on your computer.
+- 📴 **Offline-First Search**: Instant search matching across your offline tracks and playlists.
+
+---
+
+## 💾 Offline Mode (Listen Without Internet)
+
+Take your music anywhere! Download songs, albums, and playlists straight to your machine. Downloaded songs include synchronized lyrics and play with zero latency and zero buffering.
+
+### Download Music
+```bash
+# Download a single track
+music download "Hotel California"
+
+# Download an entire playlist
+music download playlist "Synthwave Chill"
+
+# Download a full album
+music download album "Coldplay Parachutes"
+
+# While listening:
+# Press 'D' on your keyboard anytime to download the currently playing song!
+```
+
+### Play Offline
+```bash
+# Play an offline track directly
+music offline play "Hotel California"
+# or with flag:
+music "Hotel California" --offline
+
+# Play an offline playlist or album
+music offline playlist "Synthwave Chill"
+music offline album "Parachutes"
+
+# Launch interactive search filtered to offline files
+music --offline
+```
+
+### Manage Offline Library
+```bash
+# View storage status and total disk space used
+music offline status
+
+# List all downloaded tracks and collections
+music offline list
+
+# Search specifically within offline music
+music offline search "coldplay"
+
+# Delete a downloaded track or collection
+music offline remove <video_id_or_title>
+
+# Clear all offline tracks
+music offline clear
+```
 
 ---
 

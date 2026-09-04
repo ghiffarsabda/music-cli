@@ -5,6 +5,7 @@ Parses LRC timestamps and generates real-time teleprompter window lines.
 """
 
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -75,6 +76,22 @@ def fetch_lyrics(
     cache_key = video_id or f"{title.lower()}::{artist.lower()}"
     if cache_key in _LYRICS_CACHE:
         return _LYRICS_CACHE[cache_key]
+
+    # Offline local lyrics check
+    if video_id:
+        try:
+            from music.offline import get_offline_lyrics_path
+            local_lrc = get_offline_lyrics_path(video_id)
+            if local_lrc and os.path.exists(local_lrc):
+                with open(local_lrc, "r", encoding="utf-8") as f:
+                    content = f.read()
+                parsed = parse_lrc(content)
+                if parsed:
+                    res = LyricsData(is_synced=True, lines=parsed, plain_text="")
+                    _LYRICS_CACHE[cache_key] = res
+                    return res
+        except Exception:
+            pass
 
     clean_title = clean_title_for_search(title)
     clean_artist = artist.split(",")[0].strip() if artist else ""

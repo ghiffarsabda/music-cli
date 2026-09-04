@@ -1,6 +1,7 @@
 """YouTube Music search and URL resolution engine."""
 
 import json
+import os
 import re
 import subprocess
 import threading
@@ -223,6 +224,16 @@ def search_music(query: str, limit: int = 5) -> List[SongItem]:
         item = resolve_direct_item(query)
         return [item] if item else []
 
+    # If offline mode is enabled, prioritize local downloaded tracks
+    try:
+        from music.offline import is_offline_mode_enabled, list_offline_tracks
+        if is_offline_mode_enabled():
+            local = list_offline_tracks(query)
+            if local:
+                return local[:limit]
+    except Exception:
+        pass
+
     # Attempt search via ytmusicapi first (best for accurate songs/artists)
     try:
         yt = get_ytmusic_client()
@@ -279,7 +290,16 @@ def search_music(query: str, limit: int = 5) -> List[SongItem]:
         pass
 
     # Fallback to yt-dlp search
-    return search_ytdlp_fallback(query, limit)
+    res = search_ytdlp_fallback(query, limit)
+    if res:
+        return res
+
+    # Offline fallback if network searches failed or unreachable
+    try:
+        from music.offline import list_offline_tracks
+        return list_offline_tracks(query)[:limit]
+    except Exception:
+        return []
 
 
 def search_playlists(query: str, limit: int = 5) -> List[PlaylistItem]:
@@ -289,6 +309,28 @@ def search_playlists(query: str, limit: int = 5) -> List[PlaylistItem]:
         if pid:
             item, _ = get_playlist_tracks(pid, limit=1)
             return [item] if item else []
+
+    # If offline mode is enabled, prioritize local offline collections
+    try:
+        from music.offline import is_offline_mode_enabled, list_offline_collections
+        if is_offline_mode_enabled():
+            cols = list_offline_collections("playlist")
+            matched = []
+            for c in cols:
+                if query.lower() in c["title"].lower() or query.lower() in c.get("author", "").lower():
+                    matched.append(
+                        PlaylistItem(
+                            title=c["title"],
+                            playlist_id=c["id"],
+                            author=c.get("author", "Offline Collection"),
+                            track_count=c.get("track_count", 0),
+                            url="",
+                        )
+                    )
+            if matched:
+                return matched[:limit]
+    except Exception:
+        pass
 
     try:
         yt = get_ytmusic_client()
@@ -333,6 +375,28 @@ def search_playlists(query: str, limit: int = 5) -> List[PlaylistItem]:
     except Exception:
         pass
 
+    # Attempt offline search if online search yielded no results or in offline mode
+    try:
+        from music.offline import list_offline_collections
+        cols = list_offline_collections("playlist")
+        matched = []
+        for c in cols:
+            if query.lower() in c["title"].lower() or query.lower() in c.get("author", "").lower():
+                matched.append(
+                    PlaylistItem(
+                        title=c["title"],
+                        playlist_id=c["id"],
+                        author=c.get("author", "Offline Collection"),
+                        track_count=c.get("track_count", 0),
+                        url=f"https://music.youtube.com/playlist?list={c['id']}",
+                        thumbnail=c.get("thumbnail", ""),
+                    )
+                )
+        if matched:
+            return matched[:limit]
+    except Exception:
+        pass
+
     return []
 
 
@@ -342,6 +406,23 @@ def get_playlist_tracks(
 ) -> Tuple[Optional[PlaylistItem], List[SongItem]]:
     """Retrieve full track list and metadata for a playlist."""
     pid = extract_playlist_id(playlist_id_or_url) or playlist_id_or_url.strip()
+
+    # Prioritize offline collection if offline mode is enabled
+    try:
+        from music.offline import is_offline_mode_enabled, get_offline_collection_tracks
+        if is_offline_mode_enabled():
+            col, local_tracks = get_offline_collection_tracks(pid)
+            if col and local_tracks:
+                p_item = PlaylistItem(
+                    title=col["title"],
+                    playlist_id=col["id"],
+                    author=col.get("author", "Offline Collection"),
+                    track_count=len(local_tracks),
+                    url="",
+                )
+                return p_item, local_tracks
+    except Exception:
+        pass
 
     # Attempt 1: ytmusicapi
     try:
@@ -453,6 +534,23 @@ def get_playlist_tracks(
     except Exception:
         pass
 
+    # Attempt 3: Offline downloaded collection fallback
+    try:
+        from music.offline import get_offline_collection_tracks
+        col, local_tracks = get_offline_collection_tracks(pid)
+        if col and local_tracks:
+            p_item = PlaylistItem(
+                title=col["title"],
+                playlist_id=col["id"],
+                author=col.get("author", "Offline Collection"),
+                track_count=len(local_tracks),
+                url=f"https://music.youtube.com/playlist?list={col['id']}",
+                thumbnail=col.get("thumbnail", ""),
+            )
+            return p_item, local_tracks
+    except Exception:
+        pass
+
     return None, []
 
 
@@ -461,6 +559,28 @@ def search_albums(query: str, limit: int = 5) -> List[AlbumItem]:
     clean = query.strip()
     if not clean:
         return []
+
+    # If offline mode is enabled, prioritize local offline collections
+    try:
+        from music.offline import is_offline_mode_enabled, list_offline_collections
+        if is_offline_mode_enabled():
+            cols = list_offline_collections("album")
+            matched = []
+            for c in cols:
+                if clean.lower() in c["title"].lower() or clean.lower() in c.get("author", "").lower():
+                    matched.append(
+                        AlbumItem(
+                            title=c["title"],
+                            browse_id=c["id"],
+                            artist=c.get("author", "Offline Collection"),
+                            year="",
+                            track_count=c.get("track_count", 0),
+                        )
+                    )
+            if matched:
+                return matched[:limit]
+    except Exception:
+        pass
 
     try:
         yt = get_ytmusic_client()
@@ -494,9 +614,34 @@ def search_albums(query: str, limit: int = 5) -> List[AlbumItem]:
             if len(items) >= limit:
                 break
 
-        return items
+        if items:
+            return items
     except Exception:
-        return []
+        pass
+
+    # Attempt offline search if online search yielded no results
+    try:
+        from music.offline import list_offline_collections
+        cols = list_offline_collections("album")
+        matched = []
+        for c in cols:
+            if clean.lower() in c["title"].lower() or clean.lower() in c.get("author", "").lower():
+                matched.append(
+                    AlbumItem(
+                        title=c["title"],
+                        browse_id=c["id"],
+                        artist=c.get("author", "Offline Collection"),
+                        year="",
+                        thumbnail=c.get("thumbnail", ""),
+                        url=f"https://music.youtube.com/browse/{c['id']}",
+                    )
+                )
+        if matched:
+            return matched[:limit]
+    except Exception:
+        pass
+
+    return []
 
 
 def get_album_tracks(browse_id: str, limit: int = 100) -> Tuple[Optional[AlbumItem], List[SongItem]]:
@@ -504,6 +649,25 @@ def get_album_tracks(browse_id: str, limit: int = 100) -> Tuple[Optional[AlbumIt
     clean_bid = extract_album_id(browse_id) or browse_id.strip()
     if not clean_bid:
         return None, []
+
+    # Prioritize offline collection if offline mode is enabled
+    try:
+        from music.offline import is_offline_mode_enabled, get_offline_collection_tracks
+        if is_offline_mode_enabled():
+            col, local_tracks = get_offline_collection_tracks(clean_bid)
+            if col and local_tracks:
+                album_item = AlbumItem(
+                    title=col["title"],
+                    browse_id=col["id"],
+                    artist=col.get("author", "Offline Collection"),
+                    year="",
+                    track_count=len(local_tracks),
+                    thumbnail=col.get("thumbnail", ""),
+                    url=f"https://music.youtube.com/browse/{col['id']}",
+                )
+                return album_item, local_tracks
+    except Exception:
+        pass
 
     try:
         yt = get_ytmusic_client()
@@ -563,7 +727,27 @@ def get_album_tracks(browse_id: str, limit: int = 100) -> Tuple[Optional[AlbumIt
 
         return album_item, tracks
     except Exception:
-        return None, []
+        pass
+
+    # Attempt 2: Offline collection fallback
+    try:
+        from music.offline import get_offline_collection_tracks
+        col, local_tracks = get_offline_collection_tracks(clean_bid)
+        if col and local_tracks:
+            album_item = AlbumItem(
+                title=col["title"],
+                browse_id=col["id"],
+                artist=col.get("author", "Offline Collection"),
+                year="",
+                track_count=len(local_tracks),
+                thumbnail=col.get("thumbnail", ""),
+                url=f"https://music.youtube.com/browse/{col['id']}",
+            )
+            return album_item, local_tracks
+    except Exception:
+        pass
+
+    return None, []
 
 
 def search_ytdlp_fallback(query: str, limit: int = 5) -> List[SongItem]:
@@ -711,6 +895,15 @@ def resolve_audio_stream_url(song_item_or_url: Any) -> str:
     else:
         vid = extract_video_id_from_url(str(song_item_or_url))
         fallback_url = f"https://www.youtube.com/watch?v={vid}"
+
+    # Instant offline playback: check if audio file exists on local disk
+    try:
+        from music.offline import get_offline_track_path
+        local_path = get_offline_track_path(vid)
+        if local_path and os.path.exists(local_path):
+            return local_path
+    except Exception:
+        pass
 
     cached_url = get_cached_stream_url(vid)
     if cached_url:
