@@ -407,20 +407,20 @@ def get_playlist_tracks(
     """Retrieve full track list and metadata for a playlist."""
     pid = extract_playlist_id(playlist_id_or_url) or playlist_id_or_url.strip()
 
-    # Prioritize offline collection if offline mode is enabled
+    # Prioritize offline collection
     try:
-        from music.offline import is_offline_mode_enabled, get_offline_collection_tracks
-        if is_offline_mode_enabled():
-            col, local_tracks = get_offline_collection_tracks(pid)
-            if col and local_tracks:
-                p_item = PlaylistItem(
-                    title=col["title"],
-                    playlist_id=col["id"],
-                    author=col.get("author", "Offline Collection"),
-                    track_count=len(local_tracks),
-                    url="",
-                )
-                return p_item, local_tracks
+        from music.offline import get_offline_collection_tracks
+        col, local_tracks = get_offline_collection_tracks(pid)
+        if col and local_tracks:
+            p_item = PlaylistItem(
+                title=col["title"],
+                playlist_id=col["id"],
+                author=col.get("author", "Offline Collection"),
+                track_count=len(local_tracks),
+                url=f"https://music.youtube.com/playlist?list={col['id']}",
+                thumbnail=col.get("thumbnail", ""),
+            )
+            return p_item, local_tracks
     except Exception:
         pass
 
@@ -650,22 +650,21 @@ def get_album_tracks(browse_id: str, limit: int = 100) -> Tuple[Optional[AlbumIt
     if not clean_bid:
         return None, []
 
-    # Prioritize offline collection if offline mode is enabled
+    # Prioritize offline collection
     try:
-        from music.offline import is_offline_mode_enabled, get_offline_collection_tracks
-        if is_offline_mode_enabled():
-            col, local_tracks = get_offline_collection_tracks(clean_bid)
-            if col and local_tracks:
-                album_item = AlbumItem(
-                    title=col["title"],
-                    browse_id=col["id"],
-                    artist=col.get("author", "Offline Collection"),
-                    year="",
-                    track_count=len(local_tracks),
-                    thumbnail=col.get("thumbnail", ""),
-                    url=f"https://music.youtube.com/browse/{col['id']}",
-                )
-                return album_item, local_tracks
+        from music.offline import get_offline_collection_tracks
+        col, local_tracks = get_offline_collection_tracks(clean_bid)
+        if col and local_tracks:
+            album_item = AlbumItem(
+                title=col["title"],
+                browse_id=col["id"],
+                artist=col.get("author", "Offline Collection"),
+                year="",
+                track_count=len(local_tracks),
+                thumbnail=col.get("thumbnail", ""),
+                url=f"https://music.youtube.com/browse/{col['id']}",
+            )
+            return album_item, local_tracks
     except Exception:
         pass
 

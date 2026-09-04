@@ -351,6 +351,60 @@ def test_download_tracker_and_progress_bars():
     print("✓ Persistent download tracker & progress bar rendering tests passed")
 
 
+def test_offline_tab_and_download_options():
+    from music.home import check_item_downloaded, get_default_items, DropdownItem
+    from music.search import SongItem, get_album_tracks, get_playlist_tracks
+
+    dummy_file = get_tracks_dir() / "tab_test.mp3"
+    dummy_file.write_bytes(b"dummy audio for tab test")
+
+    s1 = SongItem(title="Downloaded Song", artist="Artist", duration="03:10", duration_seconds=190, video_id="tab_v1", album="Album", url="http://tab_v1")
+    s2 = SongItem(title="Album Song 2", artist="Artist", duration="03:40", duration_seconds=220, video_id="tab_v2", album="Album", url="http://tab_v2")
+    save_offline_track(s1, str(dummy_file), os.path.getsize(dummy_file), "mp3")
+    save_offline_track(s2, str(dummy_file), os.path.getsize(dummy_file), "mp3")
+
+    save_offline_collection("tab_alb_1", "album", "Offline Album X", "Artist", ["tab_v1", "tab_v2"])
+    save_offline_collection("tab_pl_1", "playlist", "Offline Playlist Y", "Curator", ["tab_v1"])
+
+    # 1. check_item_downloaded returns True for offline track, False for un-downloaded track
+    d_off = DropdownItem(kind="track", title=s1.title, subtitle=s1.artist, extra="", data=s1)
+    assert check_item_downloaded(d_off) is True
+
+    s_online = SongItem(title="Not Downloaded", artist="Artist", duration="02:00", duration_seconds=120, video_id="online_v99", album="Album", url="http://online")
+    d_on = DropdownItem(kind="track", title=s_online.title, subtitle=s_online.artist, extra="", data=s_online)
+    assert check_item_downloaded(d_on) is False
+
+    # 2. get_default_items("Offline") returns playlists, albums, and tracks
+    off_items = get_default_items("Offline")
+    kinds = [it.kind for it in off_items]
+    assert "playlist" in kinds, "Playlists must be present in Offline tab"
+    assert "album" in kinds, "Albums must be present in Offline tab"
+    assert "track" in kinds, "Tracks must be present in Offline tab"
+
+    # 3. get_album_tracks returns all album tracks even when is_offline_mode_enabled is False
+    a_item, a_tracks = get_album_tracks("tab_alb_1")
+    assert a_item is not None
+    assert len(a_tracks) == 2
+    assert a_tracks[0].video_id == "tab_v1"
+    assert a_tracks[1].video_id == "tab_v2"
+
+    # 4. get_playlist_tracks returns all playlist tracks
+    p_item, p_tracks = get_playlist_tracks("tab_pl_1")
+    assert p_item is not None
+    assert len(p_tracks) == 1
+    assert p_tracks[0].video_id == "tab_v1"
+
+    # Cleanup
+    delete_offline_track("tab_v1")
+    delete_offline_track("tab_v2")
+    delete_offline_collection("tab_alb_1")
+    delete_offline_collection("tab_pl_1")
+    if dummy_file.exists():
+        dummy_file.unlink()
+
+    print("✓ Offline tab & download option verification tests passed")
+
+
 if __name__ == "__main__":
     test_offline_helpers()
     test_offline_track_and_collection_db()
@@ -358,4 +412,5 @@ if __name__ == "__main__":
     test_offline_lyrics_integration()
     test_offline_search_and_collections()
     test_download_tracker_and_progress_bars()
+    test_offline_tab_and_download_options()
     print("\n🎉 ALL OFFLINE MODE TESTS PASSED!")

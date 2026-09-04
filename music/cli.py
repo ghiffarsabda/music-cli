@@ -766,9 +766,19 @@ def launch_home_session() -> None:
         if act_type in ("track", "play_now"):
             vol = get_config_val("volume", 100)
             player = MpvPlayer(initial_volume=vol)
-            rem = action[2] if len(action) > 2 and action[2] else (staged_queue if staged_queue else None)
+            rem = action[2] if len(action) > 2 and action[2] is not None else (staged_queue if staged_queue else None)
+            pl_name = action[3] if len(action) > 3 else None
+            pl_pos = action[4] if len(action) > 4 else None
+            hist_stack = action[5] if len(action) > 5 else None
             staged_queue = []
-            run_player_loop(target, player, initial_queue=rem)
+            run_player_loop(
+                target,
+                player,
+                initial_queue=rem,
+                playlist_name=pl_name,
+                playlist_pos=pl_pos,
+                history_stack=hist_stack,
+            )
         elif act_type in ("container_track", "playlist_track"):
             vol = get_config_val("volume", 100)
             player = MpvPlayer(initial_volume=vol)

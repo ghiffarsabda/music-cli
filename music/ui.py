@@ -844,11 +844,29 @@ def run_player_loop(
                         live.start()
 
                         if search_action:
-                            act_type, target, remaining = search_action
+                            act_type = search_action[0]
+                            target = search_action[1]
+                            remaining = search_action[2] if len(search_action) > 2 else None
+                            pl_name = search_action[3] if len(search_action) > 3 else None
+                            pl_pos = search_action[4] if len(search_action) > 4 else None
+                            hist_stack = search_action[5] if len(search_action) > 5 else None
+
                             if act_type == "play_now":
                                 if remaining is not None:
                                     queue = list(remaining)
-                                    is_playlist_mode = bool(playlist_name or remaining)
+                                    queue_selected_idx = 0
+                                    queue_scroll_offset = 0
+                                if pl_name:
+                                    playlist_name = pl_name
+                                    playlist_total = pl_pos[1] if pl_pos else len(queue) + 1
+                                    playlist_index = pl_pos[0] if pl_pos else 1
+                                    if hist_stack:
+                                        history_queue = list(hist_stack)
+                                elif remaining:
+                                    playlist_name = None
+                                    playlist_total = 0
+                                    playlist_index = 0
+                                is_playlist_mode = bool(playlist_name or remaining)
                                 switch_to_song_optimistic(target, status_msg="Playing")
                                 continue
                     elif key == "up":

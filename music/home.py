@@ -197,9 +197,98 @@ def collapse_container_accordion(items: List[DropdownItem], container_id: Option
 collapse_playlist_accordion = collapse_container_accordion
 
 
-def get_default_items() -> List[DropdownItem]:
-    """Return default quick-pick items: recent history + popular genres/presets."""
+def check_item_downloaded(chosen: Any) -> bool:
+    """Return True if chosen item is already downloaded in local offline storage."""
+    if not chosen:
+        return False
+    try:
+        from music.offline import is_track_offline, get_offline_collection
+        c_kind = getattr(chosen, "kind", "")
+        c_data = getattr(chosen, "data", None)
+        if c_kind in ("track", "history"):
+            vid = getattr(c_data, "video_id", None)
+            return bool(vid and is_track_offline(vid))
+        elif c_kind in ("child_track", "playlist_track"):
+            song = getattr(c_data, "song", None)
+            vid = getattr(song, "video_id", None) if song else None
+            return bool(vid and is_track_offline(vid))
+        elif c_kind == "album":
+            bid = getattr(c_data, "browse_id", None) or getattr(chosen, "title", "")
+            col = get_offline_collection(bid)
+            return bool(col and col.get("track_count", 0) > 0)
+        elif c_kind == "playlist":
+            pid = getattr(c_data, "playlist_id", None) or getattr(chosen, "title", "")
+            col = get_offline_collection(pid)
+            return bool(col and col.get("track_count", 0) > 0)
+    except Exception:
+        pass
+    return False
+
+
+def get_default_items(filter_mode: str = "All") -> List[DropdownItem]:
+    """Return default quick-pick items based on active tab: offline library when on Offline tab."""
     items: List[DropdownItem] = []
+
+    if filter_mode == "Offline":
+        seen: Set[str] = set()
+        try:
+            from music.offline import list_offline_tracks, list_offline_collections
+            # 1. Offline Playlists
+            for p in list_offline_collections("playlist"):
+                if p["id"] not in seen:
+                    seen.add(p["id"])
+                    items.append(
+                        DropdownItem(
+                            kind="playlist",
+                            title=p["title"],
+                            subtitle=p.get("author", "Offline Playlist"),
+                            extra=f"💾 {p.get('track_count', 0)} tracks",
+                            data=PlaylistItem(
+                                title=p["title"],
+                                playlist_id=p["id"],
+                                author=p.get("author", "Offline Playlist"),
+                                track_count=p.get("track_count", 0),
+                                url="",
+                            ),
+                        )
+                    )
+
+            # 2. Offline Albums
+            for a in list_offline_collections("album"):
+                if a["id"] not in seen:
+                    seen.add(a["id"])
+                    items.append(
+                        DropdownItem(
+                            kind="album",
+                            title=a["title"],
+                            subtitle=a.get("author", "Offline Album"),
+                            extra="💾 Album",
+                            data=AlbumItem(
+                                title=a["title"],
+                                browse_id=a["id"],
+                                artist=a.get("author", "Offline Album"),
+                                year="",
+                            ),
+                        )
+                    )
+
+            # 3. Offline Songs
+            for t in list_offline_tracks():
+                if t.video_id not in seen:
+                    seen.add(t.video_id)
+                    items.append(
+                        DropdownItem(
+                            kind="track",
+                            title=t.title,
+                            subtitle=t.artist,
+                            extra=f"💾 {t.duration or '--:--'}",
+                            data=t,
+                        )
+                    )
+        except Exception:
+            pass
+
+        return items
 
     # 1. Recent History from local SQLite library
     try:
@@ -251,7 +340,7 @@ def fetch_dropdown_results(
     """Fetch search results with local history priority, disk caching, and parallel network queries."""
     clean_q = query.strip()
     if not clean_q:
-        return get_default_items()
+        return get_default_items(filter_mode)
 
     if seen_ids is None:
         seen_ids = set()
@@ -409,20 +498,9 @@ def fetch_dropdown_results(
     elif filter_mode == "Offline":
         try:
             from music.offline import list_offline_tracks, list_offline_collections
-            for t in list_offline_tracks(clean_q)[:limit]:
-                if t.video_id not in seen_ids:
-                    seen_ids.add(t.video_id)
-                    items.append(
-                        DropdownItem(
-                            kind="track",
-                            title=t.title,
-                            subtitle=t.artist,
-                            extra=f"💾 {t.duration or '--:--'}",
-                            data=t,
-                        )
-                    )
+            # 1. Offline Playlists matching query (or all if query empty)
             for p in list_offline_collections("playlist"):
-                if clean_q.lower() in p["title"].lower() or clean_q.lower() in p.get("author", "").lower():
+                if not clean_q or clean_q.lower() in p["title"].lower() or clean_q.lower() in p.get("author", "").lower():
                     if p["id"] not in seen_ids:
                         seen_ids.add(p["id"])
                         items.append(
@@ -440,8 +518,9 @@ def fetch_dropdown_results(
                                 ),
                             )
                         )
+            # 2. Offline Albums matching query (or all if query empty)
             for a in list_offline_collections("album"):
-                if clean_q.lower() in a["title"].lower() or clean_q.lower() in a.get("author", "").lower():
+                if not clean_q or clean_q.lower() in a["title"].lower() or clean_q.lower() in a.get("author", "").lower():
                     if a["id"] not in seen_ids:
                         seen_ids.add(a["id"])
                         items.append(
@@ -458,6 +537,20 @@ def fetch_dropdown_results(
                                 ),
                             )
                         )
+            # 3. Offline Tracks matching query (or all if query empty)
+            off_limit = max(limit, 100) if not clean_q else limit
+            for t in list_offline_tracks(clean_q)[:off_limit]:
+                if t.video_id not in seen_ids:
+                    seen_ids.add(t.video_id)
+                    items.append(
+                        DropdownItem(
+                            kind="track",
+                            title=t.title,
+                            subtitle=t.artist,
+                            extra=f"💾 {t.duration or '--:--'}",
+                            data=t,
+                        )
+                    )
         except Exception:
             pass
 
@@ -772,7 +865,12 @@ def render_home_screen(
             else "[bold white]2. Add to Queue[/bold white] [dim](keep current music playing uninterrupted)[/dim]"
         )
 
-        if act_kind == "album":
+        act_chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
+        is_dl = check_item_downloaded(act_chosen)
+        if is_dl:
+            dl_label = "3. Downloaded"
+            dl_hint = "(already saved in offline library)"
+        elif act_kind == "album":
             dl_label = "3. Download Album"
             dl_hint = "(download all album tracks for offline listening)"
         elif act_kind == "playlist":
@@ -782,11 +880,11 @@ def render_home_screen(
             dl_label = "3. Download Track"
             dl_hint = "(save track to local storage for offline playback)"
 
-        prefix2 = "[bold yellow]▶[/bold yellow]" if is_act2 else "  "
+        prefix2 = "[bold green]✓[/bold green]" if (is_dl and not is_act2) else ("[bold yellow]▶[/bold yellow]" if is_act2 else "  ")
         text2 = (
             f"[bold bright_white on blue] {dl_label} [/bold bright_white on blue] [dim]{dl_hint}[/dim]"
             if is_act2
-            else f"[bold white]{dl_label}[/bold white] [dim]{dl_hint}[/dim]"
+            else (f"[bold green]{dl_label}[/bold green] [dim]{dl_hint}[/dim]" if is_dl else f"[bold white]{dl_label}[/bold white] [dim]{dl_hint}[/dim]")
         )
 
         action_table.add_row(prefix0, text0)
@@ -817,13 +915,16 @@ def render_home_screen(
         tab_action = "Filter [bold cyan]Tab[/bold cyan]"
 
     if action_dialog_item:
+        act_chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
+        is_dl = check_item_downloaded(act_chosen)
+        opt3_str = "[bold green]3[/bold green] Downloaded   [dim]•[/dim]   " if is_dl else "[bold white]3[/bold white] Download   [dim]•[/dim]   "
         footer = Align.center(
             Text.from_markup(
                 "[bold cyan]↑/↓[/bold cyan] Select   [dim]•[/dim]   "
                 "[bold cyan]Enter[/bold cyan] Confirm   [dim]•[/dim]   "
                 "[bold white]1[/bold white] Play Now   [dim]•[/dim]   "
                 "[bold white]2[/bold white] Add to Queue   [dim]•[/dim]   "
-                "[bold white]3[/bold white] Download   [dim]•[/dim]   "
+                f"{opt3_str}"
                 "[bold white]Esc[/bold white] Cancel"
             )
         )
@@ -938,9 +1039,9 @@ def run_home_view(
             current_mode = filter_modes[filter_idx]
 
             if not current_q:
-                if last_searched_query != "":
+                if last_searched_query != "" or current_mode != last_searched_mode:
                     with lock:
-                        items = get_default_items()
+                        items = get_default_items(current_mode)
                         seen_ids.clear()
                         current_limit = 15
                         has_more = True
@@ -1079,23 +1180,70 @@ def run_home_view(
                         chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
                         action_dialog_item = None
                         action_dialog_idx = 0
-                        running = False
                         if chosen is None:
                             continue
                         if chosen.kind in ("track", "history"):
-                            return ("play_now", chosen.data, list(now_playing_queue) if now_playing_queue else [])
+                            running = False
+                            return ("play_now", chosen.data, list(now_playing_queue) if now_playing_queue else [], None, None, None)
                         elif chosen.kind in ("child_track", "playlist_track"):
                             c_data = chosen.data
                             rem = c_data.full_tracks[c_data.track_index + 1:]
-                            return ("play_now", c_data.song, rem)
+                            hist = c_data.full_tracks[:c_data.track_index]
+                            p_type = getattr(c_data, "parent_type", "playlist").capitalize()
+                            p_title = getattr(c_data, "parent_title", "Collection")
+                            running = False
+                            return (
+                                "play_now",
+                                c_data.song,
+                                rem,
+                                f"{p_type}: {p_title}",
+                                (c_data.track_index + 1, len(c_data.full_tracks)),
+                                hist,
+                            )
                         elif chosen.kind == "album":
-                            _, tracks = get_album_tracks(chosen.data.browse_id)
+                            bid = getattr(chosen.data, "browse_id", None) or chosen.title
+                            tracks = _ALBUM_CACHE.get(bid)
+                            album_title = getattr(chosen.data, "title", chosen.title)
+                            if not tracks:
+                                a_item, tracks = get_album_tracks(bid)
+                                if a_item and hasattr(a_item, "title") and a_item.title:
+                                    album_title = a_item.title
                             if tracks:
-                                return ("play_now", tracks[0], tracks[1:])
+                                running = False
+                                return (
+                                    "play_now",
+                                    tracks[0],
+                                    tracks[1:],
+                                    f"Album: {album_title}",
+                                    (1, len(tracks)),
+                                    [],
+                                )
+                            else:
+                                notification_msg = f"[bold red]Could not load tracks for album '{truncate_str(chosen.title, 20)}'[/bold red]"
+                                notif_clear_time = time.time() + 3.0
+                                continue
                         elif chosen.kind == "playlist":
-                            _, tracks = get_playlist_tracks(chosen.data.playlist_id)
+                            pid = getattr(chosen.data, "playlist_id", None) or chosen.title
+                            tracks = _PLAYLIST_CACHE.get(pid)
+                            pl_title = getattr(chosen.data, "title", chosen.title)
+                            if not tracks:
+                                p_item, tracks = get_playlist_tracks(pid)
+                                if p_item and hasattr(p_item, "title") and p_item.title:
+                                    pl_title = p_item.title
                             if tracks:
-                                return ("play_now", tracks[0], tracks[1:])
+                                running = False
+                                return (
+                                    "play_now",
+                                    tracks[0],
+                                    tracks[1:],
+                                    f"Playlist: {pl_title}",
+                                    (1, len(tracks)),
+                                    [],
+                                )
+                            else:
+                                notification_msg = f"[bold red]Could not load tracks for playlist '{truncate_str(chosen.title, 20)}'[/bold red]"
+                                notif_clear_time = time.time() + 3.0
+                                continue
                         elif chosen.kind == "preset":
                             query = chosen.data
                             with lock:
@@ -1117,13 +1265,25 @@ def run_home_view(
                             target_queue.append(c_data.song)
                             notification_msg = f"[bold green]✓ Added to queue:[/bold green] [white]{truncate_str(c_data.song.title, 30)}[/white] ([cyan]{len(target_queue)} in queue[/cyan])"
                         elif chosen.kind == "album":
-                            _, tracks = get_album_tracks(chosen.data.browse_id)
-                            target_queue.extend(tracks)
-                            notification_msg = f"[bold green]✓ Added {len(tracks)} album tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                            bid = getattr(chosen.data, "browse_id", None) or chosen.title
+                            tracks = _ALBUM_CACHE.get(bid)
+                            if not tracks:
+                                _, tracks = get_album_tracks(bid)
+                            if tracks:
+                                target_queue.extend(tracks)
+                                notification_msg = f"[bold green]✓ Added {len(tracks)} album tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                            else:
+                                notification_msg = f"[bold yellow]No tracks found in album '{truncate_str(chosen.title, 20)}'[/bold yellow]"
                         elif chosen.kind == "playlist":
-                            _, tracks = get_playlist_tracks(chosen.data.playlist_id)
-                            target_queue.extend(tracks)
-                            notification_msg = f"[bold green]✓ Added {len(tracks)} playlist tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                            pid = getattr(chosen.data, "playlist_id", None) or chosen.title
+                            tracks = _PLAYLIST_CACHE.get(pid)
+                            if not tracks:
+                                _, tracks = get_playlist_tracks(pid)
+                            if tracks:
+                                target_queue.extend(tracks)
+                                notification_msg = f"[bold green]✓ Added {len(tracks)} playlist tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
+                            else:
+                                notification_msg = f"[bold yellow]No tracks found in playlist '{truncate_str(chosen.title, 20)}'[/bold yellow]"
                         notif_clear_time = time.time() + 2.5
                         continue
                     elif key in ("3", "d", "D") or (key in ("\r", "\n", "enter") and action_dialog_idx == 2):
@@ -1131,6 +1291,10 @@ def run_home_view(
                         action_dialog_item = None
                         action_dialog_idx = 0
                         if chosen is None:
+                            continue
+                        if check_item_downloaded(chosen):
+                            notification_msg = f"[bold green]💾 '{truncate_str(chosen.title, 26)}' is already downloaded[/bold green]"
+                            notif_clear_time = time.time() + 2.5
                             continue
                         try:
                             from music.offline import (
@@ -1248,6 +1412,24 @@ def run_home_view(
                         continue
                     running = False
                     return None
+
+                elif key in ("left", "h", "H") and not query:
+                    filter_idx = (filter_idx - 1) % len(filter_modes)
+                    with lock:
+                        items = get_default_items(filter_modes[filter_idx])
+                        seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
+                    selected_idx = 0
+                    scroll_offset = 0
+                    continue
+
+                elif key in ("right",) and not query:
+                    filter_idx = (filter_idx + 1) % len(filter_modes)
+                    with lock:
+                        items = get_default_items(filter_modes[filter_idx])
+                        seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
+                    selected_idx = 0
+                    scroll_offset = 0
+                    continue
 
                 elif key == "up":
                     if curr_items:
@@ -1512,6 +1694,9 @@ def run_home_view(
                     with lock:
                         if query.strip():
                             is_searching = True
+                        else:
+                            items = get_default_items(filter_modes[filter_idx])
+                            seen_ids = {it.data.video_id for it in items if hasattr(it.data, "video_id")}
                     last_key_time = time.time()
                     selected_idx = 0
                     scroll_offset = 0
