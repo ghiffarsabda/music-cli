@@ -22,6 +22,8 @@ Write-Host ""
 function Test-PythonExe ($exePath) {
     if (-not $exePath) { return $false }
     if (-not (Test-Path $exePath)) { return $false }
+    # Ignore the 0-byte Windows Store redirect stub
+    if ($exePath -like "*\Microsoft\WindowsApps\*") { return $false }
     try {
         $ver = & $exePath -c "import sys; print(sys.version_info.major)" 2>$null
         if ($LASTEXITCODE -eq 0 -and $ver -and $ver.Trim() -eq "3") {
@@ -50,16 +52,18 @@ if ($pyCmd -and (Test-PythonExe $pyCmd.Source)) {
     }
 }
 
+$pyCandidates = @(
+    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+    "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
+    "$env:ProgramFiles\Python312\python.exe",
+    "$env:ProgramFiles\Python311\python.exe",
+    "${env:ProgramFiles(x86)}\Python312\python.exe"
+)
+
 # If not found in current PATH, check common default Windows Python install locations
 if (-not $pyExe) {
-    $candidates = @(
-        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
-        "$env:ProgramFiles\Python312\python.exe",
-        "$env:ProgramFiles\Python311\python.exe"
-    )
-    foreach ($cand in $candidates) {
+    foreach ($cand in $pyCandidates) {
         if (Test-PythonExe $cand) {
             $pyExe = $cand
             break
@@ -78,18 +82,11 @@ if (-not $pyExe) {
             winget install --id Python.Python.3.12 -e --silent --accept-package-agreements --accept-source-agreements | Out-Null
         } catch {}
         Refresh-EnvPath
-    }
-
-    # Re-check candidate paths after winget
-    $candidates = @(
-        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-        "$env:ProgramFiles\Python312\python.exe"
-    )
-    foreach ($cand in $candidates) {
-        if (Test-PythonExe $cand) {
-            $pyExe = $cand
-            break
+        foreach ($cand in $pyCandidates) {
+            if (Test-PythonExe $cand) {
+                $pyExe = $cand
+                break
+            }
         }
     }
 
@@ -105,9 +102,11 @@ if (-not $pyExe) {
             Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
             Refresh-EnvPath
             
-            $pyCandidate = "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe"
-            if (Test-PythonExe $pyCandidate) {
-                $pyExe = $pyCandidate
+            foreach ($cand in $pyCandidates) {
+                if (Test-PythonExe $cand) {
+                    $pyExe = $cand
+                    break
+                }
             }
         } catch {}
     }
@@ -123,68 +122,93 @@ $pyVer = & $pyExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_
 Write-Host "✓ Python $pyVer ready" -ForegroundColor Green
 
 # 2. Detect or Automatically Install mpv
+$mpvExe = $null
 $mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
-if (-not $mpvCmd) {
-    $mpvCandidates = @(
-        "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe",
-        "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
-        "$env:ProgramFiles\mpv\mpv.exe",
-        "C:\ProgramData\chocolatey\bin\mpv.exe",
-        "C:\mpv\mpv.exe",
-        "C:\tools\mpv\mpv.exe"
-    )
+if ($mpvCmd) {
+    $mpvExe = $mpvCmd.Source
+}
+
+$mpvCandidates = @(
+    "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe",
+    "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
+    "$env:ProgramFiles\mpv\mpv.exe",
+    "${env:ProgramFiles(x86)}\mpv\mpv.exe",
+    "C:\ProgramData\chocolatey\bin\mpv.exe",
+    "C:\mpv\mpv.exe",
+    "C:\tools\mpv\mpv.exe",
+    "$env:USERPROFILE\scoop\apps\mpv\current\mpv.exe"
+)
+if (-not $mpvExe) {
     foreach ($cand in $mpvCandidates) {
         if (Test-Path $cand) {
-            $mpvCmd = $cand
+            $mpvExe = $cand
             break
         }
     }
 }
+if (-not $mpvExe -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages")) {
+    $found = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "mpv.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { $mpvExe = $found.FullName }
+}
 
-if (-not $mpvCmd) {
+if (-not $mpvExe) {
     Write-Host "🎵 Setting up audio player..." -ForegroundColor Magenta
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         try {
             winget install --id shinchiro.mpv -e --silent --accept-package-agreements --accept-source-agreements | Out-Null
         } catch {}
         Refresh-EnvPath
-        $mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
-        if (-not $mpvCmd) {
-            $mpvCandidates = @(
-                "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe",
-                "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
-                "$env:ProgramFiles\mpv\mpv.exe"
-            )
+        $cmdCheck = Get-Command mpv -ErrorAction SilentlyContinue
+        if ($cmdCheck) { $mpvExe = $cmdCheck.Source }
+        if (-not $mpvExe) {
             foreach ($cand in $mpvCandidates) {
                 if (Test-Path $cand) {
-                    $mpvCmd = $cand
+                    $mpvExe = $cand
                     break
                 }
             }
         }
+        if (-not $mpvExe -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages")) {
+            $found = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "mpv.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $mpvExe = $found.FullName }
+        }
     }
-    if ($mpvCmd) {
-        Write-Host "✓ Audio player ready" -ForegroundColor Green
-    } else {
-        Write-Host "✓ Audio player setup complete" -ForegroundColor Green
+}
+
+if ($mpvExe) {
+    $mpvDir = Split-Path -Parent $mpvExe
+    if ($env:Path -notlike "*$mpvDir*") {
+        $env:Path = "$mpvDir;$env:Path"
     }
-} else {
     Write-Host "✓ Audio player ready" -ForegroundColor Green
+} else {
+    Write-Host "✓ Audio player setup complete" -ForegroundColor Green
 }
 
 # 3. Setup isolated virtual environment in %LOCALAPPDATA%\music-cli
 $installDir = Join-Path $env:LOCALAPPDATA "music-cli"
 $venvDir = Join-Path $installDir "venv"
 $scriptsDir = Join-Path $venvDir "Scripts"
+$venvPython = Join-Path $scriptsDir "python.exe"
 
 Write-Host "✨ Installing music-cli..." -ForegroundColor Magenta
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
-& $pyExe -m venv $venvDir
+# Clean up corrupted or incomplete venv from previous failed attempts
+if ((Test-Path $venvDir) -and (-not (Test-Path $venvPython))) {
+    Remove-Item -Recurse -Force $venvDir -ErrorAction SilentlyContinue
+}
+
+if (-not (Test-Path $venvPython)) {
+    & $pyExe -m venv $venvDir
+}
 
 # 4. Install / Upgrade music-cli (zip archive doesn't require git CLI)
-$venvPython = Join-Path $scriptsDir "python.exe"
 & $venvPython -m pip install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
+
+# Create command wrapper music.cmd so running 'music' works reliably across CMD and PowerShell
+$cmdWrapper = Join-Path $scriptsDir "music.cmd"
+Set-Content -Path $cmdWrapper -Value "@echo off`r`n`"%~dp0python.exe`" -m music.main %*"
 
 # 5. Add to User PATH if needed
 $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
@@ -201,6 +225,6 @@ Write-Host "━━━━━━━━━━━━━━━━━━━━━━�
 Write-Host "🎉 You're all set! music-cli is installed!" -ForegroundColor Green
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
 Write-Host ""
-Write-Host "Close this window and open PowerShell again, then type:" -ForegroundColor White
+Write-Host "To start listening, simply type:" -ForegroundColor White
 Write-Host "  music" -ForegroundColor Cyan
 Write-Host ""
