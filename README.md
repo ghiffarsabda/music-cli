@@ -1,278 +1,187 @@
 # 🎵 Music CLI
 
-A sleek, lightweight terminal application to stream music directly from **YouTube Music**.
-
-No account or login is required to play songs. If you have a **YouTube Music / YouTube Premium** subscription, you can easily connect your account to enjoy uninterrupted, ad-free streaming!
-
----
-
-## ✨ Features
-
-- ⚡ **Instant Streaming**: Just run `music "song name"` and start listening immediately.
-- 🎯 **Interactive TUI Player**: Real-time progress bar, track/artist/album metadata, and playback status.
-- ⌨️ **Live Keyboard Controls**: Play/pause, seek, volume adjustments, mute, replay, and exit without leaving the terminal.
-- 🔍 **Interactive Search**: Browse top matching songs with `music -s "query"` or `music search "query"`.
-- 🛡️ **Optional Authentication & Ad-Free Mode**:
-  - Direct browser cookie extraction (`music login --browser chrome`)
-  - Netscape `cookies.txt` import (`music login --cookies file.txt`)
-  - Ad-free streaming for YouTube Premium accounts
-  - Standard ad-supported guest mode by default (zero setup required)
-- 📜 **Playback History**: View and replay recent tracks with `music history`.
-- ⚙️ **Configurable**: Customize default volume, audio quality, and default browser.
+> **The simplest, ad-free music player for your terminal.**  
+> Stream any song, album, or playlist from YouTube Music with live synchronized lyrics, instant queue management, and zero account setup.
 
 ---
 
-## 📦 Installation
+## ⚡ Quick Install (Get Started in 10 Seconds)
 
-### 🍎 macOS & 🐧 Linux (One-line installer)
+No signups, accounts, or complex setup required. Just paste one line into your terminal:
 
-Paste this into your terminal and hit Enter:
+### 🍎 Mac & 🐧 Linux
+Open your **Terminal** and run:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ghiffarsabda/music-cli/main/install.sh | bash
 ```
-> *This automatically sets up an isolated environment in `~/.local/share/music-cli`, checks for `mpv`, links the `music` command to `~/.local/bin`, and updates your PATH if needed.*
 
-### 🪟 Windows (PowerShell)
-
-Open PowerShell and run:
+### 🪟 Windows
+Open **PowerShell** and run:
 ```powershell
 irm https://raw.githubusercontent.com/ghiffarsabda/music-cli/main/install.ps1 | iex
 ```
 
-### 🐍 Alternative: Using `pipx` (All Platforms)
+> **Done!** Now just type **`music`** and press Enter to start listening.
 
-If you have `pipx` installed:
+---
+
+## 🎧 How to Use
+
+### 1. Interactive Search (Easiest Way)
+Just type:
+```bash
+music
+```
+- A clean search box will appear in the center of your screen.
+- Start typing any song name, artist, album, or playlist (e.g. `Bohemian Rhapsody`, `Coldplay`, `Lofi`).
+- Use <kbd>↑</kbd> and <kbd>↓</kbd> arrows to highlight a song and press <kbd>Enter</kbd>.
+- A menu will pop up asking what you want to do:
+  - Press <kbd>1</kbd> or <kbd>Enter</kbd> to **Play Now**
+  - Press <kbd>2</kbd> to **Add to Queue** (keeps your current music playing)
+
+---
+
+### 2. Play a Song Directly
+Know what you want to listen to? Play it right from the command line:
+```bash
+music "Somewhere Only We Know"
+```
+Or without quotes for short names:
+```bash
+music Starboy
+```
+
+---
+
+### 3. Play a Playlist or Album
+Want non-stop music for studying or working?
+```bash
+# Search and choose from popular playlists
+music playlist "Lofi Chill Beats"
+
+# Shuffle the playlist randomly
+music playlist "Synthwave Radio" --shuffle
+
+# Play directly from a YouTube or YouTube Music link
+music playlist "https://music.youtube.com/playlist?list=..."
+```
+
+---
+
+### 4. Stop All Music
+If you closed your terminal while music was playing and want to turn it off:
+```bash
+music stop
+```
+
+---
+
+## ⌨️ Player Controls Cheat Sheet
+
+While music is playing, control everything using your keyboard:
+
+| Key | What it does |
+|:---:|---|
+| <kbd>Space</kbd> | **Play / Pause** |
+| <kbd>P</kbd> | **Previous track** (replays song if playing for >3s) |
+| <kbd>N</kbd> | **Next track** (skips to the next song in queue) |
+| <kbd>/</kbd> | **Search for new songs** without stopping the current music |
+| <kbd>→</kbd> / <kbd>←</kbd> | Fast-forward / rewind by **5 seconds** |
+| <kbd>+</kbd> / <kbd>-</kbd> | Increase / decrease volume by **5%** |
+| <kbd>M</kbd> | **Mute / Unmute** |
+| <kbd>Q</kbd> | **Quit** and close the player |
+
+### 🎶 Managing the Queue
+The **Up Next Queue** is always visible right below your player box:
+- <kbd>↑</kbd> / <kbd>↓</kbd> — Select a song in the queue
+- <kbd>Shift + ↑</kbd> / <kbd>Shift + ↓</kbd> (or <kbd>K</kbd> / <kbd>J</kbd>) — **Move song up or down** in the queue
+- <kbd>x</kbd> or <kbd>Del</kbd> — **Remove** the highlighted song from the queue
+- <kbd>Enter</kbd> — **Play now** (jump straight to this song)
+- <kbd>c</kbd> — **Clear** the entire upcoming queue
+
+---
+
+## ✨ Features You'll Love
+
+- 🛡️ **Built-in Ad Blocker**: Blocks annoying YouTube video ads automatically. It even skips sponsored promos and non-music talking intros inside songs.
+- 🎤 **Live Karaoke Lyrics**: Real-time synchronized scrolling lyrics highlight line-by-line as the artist sings.
+- ⚡ **Lightning Fast & Lightweight**: Uses virtually no memory or CPU compared to opening a heavy web browser tab.
+- 🔒 **100% Private & Local**: Your listening history is saved only on your own computer. It is never tracked or sent to the cloud.
+- 📴 **Offline-First Search**: Previously played songs show up instantly (0ms) as you type, even before web results finish loading.
+
+---
+
+## ❓ Frequently Asked Questions (FAQ)
+
+<details>
+<summary><b>Do I need a Google account or YouTube Premium?</b></summary>
+<br>
+<b>No!</b> Everything works right out of the box without logging in or signing up. Guest mode is enabled by default.
+</details>
+
+<details>
+<summary><b>Is it free?</b></summary>
+<br>
+<b>Yes, 100% free and open-source.</b> There are no subscriptions, paywalls, or hidden fees.
+</details>
+
+<details>
+<summary><b>How do I see my recently played songs?</b></summary>
+<br>
+Run <code>music history</code> to view your recent tracks, or select a number to replay any past song. To wipe your history, run <code>music history --clear</code>.
+</details>
+
+<details>
+<summary><b>Can I connect my YouTube Premium account? (Optional)</b></summary>
+<br>
+If you want to access your private account playlists, you can optionally run <code>music login</code>. You can log out anytime with <code>music login --logout</code>.
+</details>
+
+---
+
+## 🛠️ Advanced & Developer Usage
+
+<details>
+<summary><b>Alternative Installation Methods (pipx / manual)</b></summary>
+
+### Using `pipx` (Recommended for Python developers)
 ```bash
 pipx install git+https://github.com/ghiffarsabda/music-cli.git
 ```
 
----
-
-## 🚀 Quick Start
-
-### 0. Interactive Home Screen (OpenCode Style)
-
-Just run `music` alone to launch the centered interactive search bar:
-
+### Manual Git Clone & Editable Install
 ```bash
-music
+git clone https://github.com/ghiffarsabda/music-cli.git
+cd music-cli
+pip install -e .
+```
+</details>
+
+<details>
+<summary><b>System Requirements & Dependencies</b></summary>
+
+- **Python**: Version 3.9 or newer
+- **`mpv`**: Lightweight audio engine (automatically installed by the one-line installer)
+- **`yt-dlp`**: Audio stream resolver (automatically installed via Python dependencies)
+</details>
+
+<details>
+<summary><b>Configuration Settings</b></summary>
+
+View current configuration:
+```bash
+music config
 ```
 
-- 🔍 **Centered Search Bar**: Start typing any song, artist, album, or playlist title.
-- ⚡ **Instant Local-First Matching (0ms Latency)**: As you type, previously played tracks from your local history show up instantly on the exact keystroke without needing an internet connection.
-- 🚀 **Parallel Multi-Category Search (2.4x Faster)**: Concurrently searches songs, albums, and playlists simultaneously using worker threads.
-- 💾 **Persistent Query Disk Cache**: Instant sub-millisecond retrieval for repeat searches with automatic 24-hour cache invalidation.
-- 🌊 **Asynchronous Infinite Scroll**: Keep scrolling down (<kbd>↓</kbd>) to continuously and asynchronously fetch more search results without freezing the UI.
-- 📂 **Interactive Album & Playlist Accordions**: Highlight any album or playlist and hit <kbd>Tab</kbd> to expand its tracks in-place. Scroll through the songs and hit <kbd>Enter</kbd> to start playback from that track, or hit <kbd>Tab</kbd> again to collapse!
-- 🕒 **Recent History & Quick Picks**: Instant access to your recent playback history and curated popular genres when the search bar is empty.
-- 🔀 **Filter Toggling**: Press <kbd>Tab</kbd> on a song or search bar to cycle search filters (`All` ➔ `Tracks` ➔ `Albums` ➔ `Playlists`).
-- ⌨️ **Intuitive Keyboard Navigation**: <kbd>↑</kbd> / <kbd>↓</kbd> to navigate, <kbd>Enter</kbd> to play instantly, <kbd>Esc</kbd> to close accordion / exit.
-
-### 1. Direct Playback (Top Result)
-
+Change default settings:
 ```bash
-music "Never Gonna Give You Up"
-```
-Or short queries:
-```bash
-music Bohemian Rhapsody
-```
+# Set default startup volume (0 to 100)
+music config set volume 80
 
-### 2. Search & Select
+# Disable lyrics by default
+music config set show_lyrics false
 
-Want to choose between studio versions, live versions, or remasters? Use the search flag `-s` or the `search` command:
-
-```bash
-music "Hotel California" -s
-# or
-music search "Hotel California"
-```
-
-### 3. Direct YouTube / YouTube Music URL
-
-```bash
-music url "https://music.youtube.com/watch?v=dQw4w9WgXcQ"
-```
-
-### 4. Play from a Selected Playlist
-
-Stream entire YouTube Music playlists with gapless transitions and live track indicators (`Playlist: <Title> (3/20)`):
-
-```bash
-# Search for playlists and pick one from an interactive table
-music playlist "Lofi Hip Hop"
-
-# Play a playlist in random/shuffle mode
-music playlist "Synthwave Chill" --shuffle
-
-# Pick a specific starting song from the playlist
-music playlist "Top Hits 2024" -s
-
-# Stream directly from a YouTube or YouTube Music playlist URL
-music playlist "https://music.youtube.com/playlist?list=PL..."
-```
-
-### 5. Stop All Background Playback
-
-Instantly stop playback and kill any background audio processes:
-
-```bash
-music stop
-# or
-music kill
-```
-
----
-
-## ⌨️ Interactive Player Controls
-
-While a track is playing in your terminal:
-
-| Key | Action |
-|---|---|
-| <kbd>Space</kbd> | Toggle Play / Pause |
-| <kbd>/</kbd> or <kbd>s</kbd> | **Search while playing** (Uninterrupted playback, Play Now or Add to Queue) |
-| <kbd>P</kbd> | **Previous track** (or replay from start if &gt;3s) |
-| <kbd>N</kbd> | **Skip to Next track** (Autoplay queue) |
-| <kbd>→</kbd> / <kbd>←</kbd> | Seek forward / backward 5 seconds |
-| <kbd>↑</kbd> / <kbd>↓</kbd> | **Select track in queue** |
-| <kbd>+</kbd> / <kbd>-</kbd> | Increase / decrease volume by 5% |
-| <kbd>M</kbd> | Toggle Mute |
-| <kbd>Q</kbd> | Stop playback and quit |
-
----
-
-## 🎶 Up Next Queue (Always Visible Docked View)
-
-The Up Next Queue is permanently docked directly beneath the playback panel for instant queue management without interrupting playback:
-
-| Key | Action |
-|---|---|
-| <kbd>↑</kbd> / <kbd>↓</kbd> | Select track in the queue |
-| <kbd>Shift+↑</kbd> / <kbd>K</kbd> | **Move track UP** in queue order |
-| <kbd>Shift+↓</kbd> / <kbd>J</kbd> | **Move track DOWN** in queue order |
-| <kbd>x</kbd> / <kbd>Del</kbd> / <kbd>d</kbd> | **Remove track** from queue |
-| <kbd>c</kbd> | **Clear** entire upcoming queue |
-| <kbd>Enter</kbd> | **Play Now** (immediately jump to selected track) |
-| <kbd>Esc</kbd> / <kbd>Tab</kbd> | Return to full player dashboard |
-
----
-
-## 🔎 Search While Playing (Uninterrupted Playback)
-
-You can search and explore music **without interrupting your currently playing track**:
-1. Press <kbd>/</kbd> or <kbd>s</kbd> while any song is playing.
-2. The search interface opens with a live mini-player banner at the top (`▶ Now Playing: <Song> (01:23 / 03:45) • Queue: 3`), while your audio stream continues playing smoothly in the background.
-3. Browse songs, albums, and playlists with instant SQLite FTS5 matching, 0ms prefix filtering, and accordion expansions.
-4. **Choose your action on any highlighted item**:
-   - **Play Now** (<kbd>Enter</kbd> / <kbd>1</kbd>): Switch immediately to the selected track.
-   - **Add to Queue** (<kbd>a</kbd> / <kbd>2</kbd> / <kbd>+</kbd>): Add the track or entire album/playlist to your playback queue without interrupting the current song.
-5. Press <kbd>Esc</kbd> anytime to return to the full player dashboard and synchronized lyrics teleprompter.
-
----
-
-## 🎤 Time-Synchronized Lyrics (Karaoke Mode)
-
-`music-cli` integrates synchronized LRC lyrics powered by the open-source **LRCLIB** database (with YouTube Music fallback):
-- **Live Karaoke Teleprompter**: The terminal centers and highlights the active sung line in real-time (`[bold bright_yellow]▶ Line text[/bold bright_yellow]`), alongside previous and upcoming lines.
-- **Instrumental Detection**: Automatically indicates `♪ (Instrumental Intro) ♪` and `♪ (Outro) ♪`.
-- **Toggle Anytime**: Press <kbd>l</kbd> during playback to toggle the lyrics display on or off.
-
-```bash
-# Stream with lyrics disabled
-music "Hotel California" --no-lyrics
-
-# Configure default
-music config set show_lyrics true
-```
-
----
-
-## 🛡️ Built-in Ad Blocker (uBlock & SponsorBlock Integration)
-
-`music-cli` comes with **out-of-the-box ad blocking enabled by default**:
-1. **Direct Stream Media Extraction**: YouTube video ads (pre-roll, mid-roll, post-roll) are eliminated because `music-cli` extracts only the media audio stream directly from YouTube CDN (`googlevideo.com`).
-2. **In-Stream Sponsor & Ad Skipping**: Automatically detects and skips sponsored segments ("This song is brought to you by..."), self-promotions, interaction reminders, and non-music video intros/skits using the community-verified SponsorBlock database.
-3. **Domain Blocklist**: Blocks DoubleClick, Google AdSense, and telemetry endpoints inspired by uBlock Origin / EasyList filters.
-
-Toggle dynamically during playback by pressing <kbd>b</kbd>, or disable via `--no-adblock`:
-```bash
-# Disable ad blocker for a session
-music "Bohemian Rhapsody" --no-adblock
-
-# Toggle globally
+# Disable built-in ad blocker
 music config set ad_blocker false
 ```
-
----
-
-## 🔐 Authentication (YouTube Premium / Skip Ads)
-
-By default, `music-cli` runs in **Guest / Standard Mode** (no login needed).
-
-If you have a YouTube Music / YouTube Premium subscription across multiple Google accounts, you can authenticate via an interactive hyperlink:
-
-### 1. Interactive Hyperlink & Multi-Account Login
-
-Simply run:
-```bash
-music login
-```
-This displays:
-1. **Clickable Hyperlink**:
-   `https://accounts.google.com/AccountChooser?continue=https://music.youtube.com`
-2. **Account Switcher**: An interactive numbered list of all Google accounts detected on your machine (e.g. `ghiffarsabda@gmail.com`, work emails, etc.).
-3. **One-key actions**:
-   - Type `1-N` to immediately link that account.
-   - Type `o` to open the Google Account Chooser link in your browser.
-   - Type `c` to import an exported `cookies.txt` file.
-
-You can also open the browser directly from the command:
-```bash
-music login --open
-```
-
-### 2. Manage Authentication
-- **Check login status**:
-  ```bash
-  music login --status
-  ```
-- **Log out (return to standard guest mode)**:
-  ```bash
-  music login --logout
-  ```
-
----
-
-## 📜 History & Configuration
-
-### View Recently Played Songs
-
-```bash
-# View recent tracks and replay by number
-music history
-
-# Clear playback history
-music history --clear
-```
-
-### View & Edit Configuration
-
-```bash
-# View all settings
-music config
-
-# Set default volume (0-100)
-music config set volume 85
-
-# Change default browser for authentication
-music config set browser firefox
-```
-
----
-
-## 📦 Requirements
-
-- Python 3.9+
-- [`mpv`](https://mpv.io) (Audio playback backend)
-- [`yt-dlp`](https://github.com/yt-dlp/yt-dlp)
+</details>
