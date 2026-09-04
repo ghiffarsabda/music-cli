@@ -153,9 +153,8 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 & $pyExe -m venv $venvDir
 
 # 4. Install / Upgrade music-cli (zip archive doesn't require git CLI)
-$pipExe = Join-Path $scriptsDir "pip.exe"
-& $pipExe install --upgrade pip --quiet
-& $pipExe install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
+$venvPython = Join-Path $scriptsDir "python.exe"
+& $venvPython -m pip install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
 
 # 5. Add to User PATH if needed
 $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)

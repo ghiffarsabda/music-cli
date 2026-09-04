@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           choco install mpv -y
-          echo "C:\ProgramData\chocolatey\bin" >> $env:GITHUB_PATH
+          Add-Content $env:GITHUB_PATH "C:\ProgramData\chocolatey\bin" -Encoding utf8
 
       - name: Test One-line Installer (Linux & macOS)
         if: runner.os != 'Windows'
@@ -65,6 +65,9 @@ jobs:
       - name: Run Test Suites
         shell: bash
         run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export PATH="/c/ProgramData/chocolatey/bin:$PATH"
+          fi
           pip install -e .
           python tests/test_components.py
           python tests/test_local_perf.py
