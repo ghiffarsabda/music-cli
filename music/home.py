@@ -472,6 +472,65 @@ def fetch_dropdown_results(
     return items
 
 
+def render_search_download_banner(tracker_info: dict, width: int = 70) -> Panel:
+    """Render persistent download progress banner in the search page."""
+    state = tracker_info.get("state", "idle")
+    item_type = (tracker_info.get("item_type") or "song").capitalize()
+    collection = tracker_info.get("collection_title", "")
+    current_title = tracker_info.get("current_title", "")
+    idx = tracker_info.get("current_index", 1)
+    total = tracker_info.get("total_items", 1)
+    percent = tracker_info.get("percent", 0.0)
+    speed = tracker_info.get("speed", "")
+    eta = tracker_info.get("eta", "")
+    msg = tracker_info.get("message", "")
+
+    if state == "finished":
+        border_style = "bright_green"
+        title = "[bold bright_green]✓ Download Complete[/bold bright_green]"
+    elif state == "error":
+        border_style = "bright_red"
+        title = "[bold bright_red]✗ Download Failed[/bold bright_red]"
+    else:
+        border_style = "bright_magenta"
+        title = f"[bold bright_magenta]⬇ Downloading {item_type} to Offline Storage[/bold bright_magenta]"
+
+    inner_w = max(30, width - 8)
+    bar_width = max(16, inner_w - 32)
+    filled = int((percent / 100.0) * bar_width)
+    empty = max(0, bar_width - filled)
+    bar_color = "bright_green" if state == "finished" else ("bright_red" if state == "error" else "bright_magenta")
+    bar_str = f"[{bar_color}]{'━' * filled}[/{bar_color}][dim]{'━' * empty}[/dim]"
+
+    stats_parts = [f"[bold white]{percent:5.1f}%[/bold white]"]
+    if speed:
+        stats_parts.append(f"[dim cyan]{speed}[/dim cyan]")
+    if eta:
+        stats_parts.append(f"[dim]ETA {eta}[/dim]")
+    stats_line = "  •  ".join(stats_parts)
+
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column(no_wrap=True)
+
+    if total > 1:
+        grid.add_row(f"[bold cyan]{truncate_str(collection, 30)}[/bold cyan] [dim white]• Track [{idx}/{total}]:[/dim white] [white]{truncate_str(current_title, 32)}[/white]")
+    else:
+        grid.add_row(f"[bold white]Track:[/bold white] [cyan]{truncate_str(current_title or collection, 44)}[/cyan]")
+
+    grid.add_row(f"{bar_str}   {stats_line}")
+    if state in ("finished", "error") and msg:
+        grid.add_row(f"[italic]{msg}[/italic]")
+
+    return Panel(
+        grid,
+        title=title,
+        title_align="left",
+        border_style=border_style,
+        width=width,
+        padding=(0, 2),
+    )
+
+
 def render_home_screen(
     query: str,
     cursor_on: bool,
@@ -782,7 +841,15 @@ def render_home_screen(
         )
 
     # 5. Vertical Centering Calculation
-    content_height = 17
+    tracker_active = False
+    try:
+        from music.offline import get_download_tracker
+        tracker = get_download_tracker()
+        tracker_active = tracker.is_active()
+    except Exception:
+        pass
+
+    content_height = 21 if tracker_active else 17
     top_pad = max(1, (console_height - content_height) // 2)
 
     elements = []
@@ -801,6 +868,10 @@ def render_home_screen(
         elements.append(Align.center(dialog_panel))
     else:
         elements.append(Align.center(dropdown_panel))
+
+    if tracker_active:
+        elements.append(Text(""))
+        elements.append(Align.center(render_search_download_banner(tracker.get_snapshot(), width=panel_width)))
 
     elements.extend([
         Text(""),
@@ -1101,7 +1172,7 @@ def run_home_view(
                                         from music.search import get_album_tracks
                                         _, tracks = get_album_tracks(a_item.browse_id)
                                         if tracks:
-                                            download_songs_batch(tracks, collection_type="album", collection_name=a_item.title)
+                                            download_songs_batch(tracks, collection_type="album", collection_title=a_item.title, show_cli_progress=False)
                                             save_offline_collection(
                                                 collection_id=a_item.browse_id,
                                                 collection_type="album",
@@ -1121,7 +1192,7 @@ def run_home_view(
                                         from music.search import get_playlist_tracks
                                         _, tracks = get_playlist_tracks(p_item.playlist_id)
                                         if tracks:
-                                            download_songs_batch(tracks, collection_type="playlist", collection_name=p_item.title)
+                                            download_songs_batch(tracks, collection_type="playlist", collection_title=p_item.title, show_cli_progress=False)
                                             save_offline_collection(
                                                 collection_id=p_item.playlist_id,
                                                 collection_type="playlist",

@@ -495,6 +495,64 @@ def render_queue_panel(
     )
 
 
+def render_download_progress_card(tracker_info: dict, width: int = 70) -> Panel:
+    """Render persistent download progress card under the queue panel."""
+    state = tracker_info.get("state", "idle")
+    item_type = (tracker_info.get("item_type") or "song").capitalize()
+    collection = tracker_info.get("collection_title", "")
+    current_title = tracker_info.get("current_title", "")
+    idx = tracker_info.get("current_index", 1)
+    total = tracker_info.get("total_items", 1)
+    percent = tracker_info.get("percent", 0.0)
+    speed = tracker_info.get("speed", "")
+    eta = tracker_info.get("eta", "")
+    msg = tracker_info.get("message", "")
+
+    if state == "finished":
+        border_style = "bright_green"
+        title = "[bold bright_green]✓ Download Complete[/bold bright_green]"
+    elif state == "error":
+        border_style = "bright_red"
+        title = "[bold bright_red]✗ Download Failed[/bold bright_red]"
+    else:
+        border_style = "bright_magenta"
+        title = f"[bold bright_magenta]⬇ Downloading {item_type} to Offline Storage[/bold bright_magenta]"
+
+    inner_w = max(30, width - 8)
+    bar_width = max(16, inner_w - 32)
+    filled = int((percent / 100.0) * bar_width)
+    empty = max(0, bar_width - filled)
+    bar_color = "bright_green" if state == "finished" else ("bright_red" if state == "error" else "bright_magenta")
+    bar_str = f"[{bar_color}]{'━' * filled}[/{bar_color}][dim]{'━' * empty}[/dim]"
+
+    stats_parts = [f"[bold white]{percent:5.1f}%[/bold white]"]
+    if speed:
+        stats_parts.append(f"[dim cyan]{speed}[/dim cyan]")
+    if eta:
+        stats_parts.append(f"[dim]ETA {eta}[/dim]")
+    stats_line = "  •  ".join(stats_parts)
+
+    grid = Table.grid(padding=(0, 1))
+    grid.add_column(no_wrap=True)
+
+    if total > 1:
+        grid.add_row(f"[bold cyan]{_truncate_text(collection, 30)}[/bold cyan] [dim white]• Track [{idx}/{total}]:[/dim white] [white]{_truncate_text(current_title, 32)}[/white]")
+    else:
+        grid.add_row(f"[bold white]Track:[/bold white] [cyan]{_truncate_text(current_title or collection, 44)}[/cyan]")
+
+    grid.add_row(f"{bar_str}   {stats_line}")
+    if state in ("finished", "error") and msg:
+        grid.add_row(f"[italic]{msg}[/italic]")
+
+    return Panel(
+        grid,
+        title=title,
+        title_align="left",
+        border_style=border_style,
+        padding=(0, 2),
+    )
+
+
 def run_player_loop(
     song: SongItem,
     player: MpvPlayer,
@@ -542,6 +600,65 @@ def run_player_loop(
                     player.clear_playlist_queue()
                 buffered_song = None
                 prebuffering_vid = None
+
+    play_token = 0
+    is_loading_stream = False
+
+    def switch_to_song_optimistic(new_song: SongItem, status_msg: str = "Playing"):
+        nonlocal curr_song, play_token, is_loading_stream, message, msg_clear_time
+        nonlocal current_lyrics, current_segments, skipped_ranges, buffered_song, prebuffering_vid
+
+        history_queue.append(curr_song)
+        curr_song = new_song
+        add_to_history(curr_song)
+
+        play_token += 1
+        this_token = play_token
+        is_loading_stream = True
+        current_lyrics = None
+        current_segments = []
+        skipped_ranges = set()
+
+        message = f"⌛ Buffering: {_truncate_text(curr_song.title, 26)}..."
+        msg_clear_time = time.time() + 8.0
+
+        with lock:
+            was_buffered = bool(buffered_song and buffered_song.video_id == curr_song.video_id)
+            buffered_song = None
+            prebuffering_vid = None
+
+        if was_buffered:
+            player.next_track()
+            is_loading_stream = False
+            message = f"▶ {status_msg}: {_truncate_text(curr_song.title, 26)}"
+            msg_clear_time = time.time() + 2.5
+            threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
+            threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
+            sync_prebuffered_track()
+        else:
+            player.clear_playlist_queue()
+            player.pause()
+
+            def _async_play_worker(target_song: SongItem, token: int):
+                nonlocal is_loading_stream, message, msg_clear_time
+                try:
+                    url = resolve_audio_stream_url(target_song)
+                    if token != play_token:
+                        return
+                    player.play(url)
+                    is_loading_stream = False
+                    message = f"▶ {status_msg}: {_truncate_text(target_song.title, 26)}"
+                    msg_clear_time = time.time() + 2.5
+                    threading.Thread(target=fetch_segments, args=(target_song.video_id,), daemon=True).start()
+                    threading.Thread(target=fetch_lyrics_task, args=(target_song,), daemon=True).start()
+                    sync_prebuffered_track()
+                except Exception as e:
+                    if token == play_token:
+                        is_loading_stream = False
+                        message = f"[Playback Error: {e}]"
+                        msg_clear_time = time.time() + 3.0
+
+            threading.Thread(target=_async_play_worker, args=(curr_song, this_token), daemon=True).start()
 
     # AdBlock segments for current track
     current_segments: List[dict] = []
@@ -676,56 +793,18 @@ def run_player_loop(
                         else:
                             prev_song = history_queue.pop()
                             queue.insert(0, curr_song)
-                            curr_song = prev_song
                             if playlist_index > 1:
                                 playlist_index -= 1
-                            player.clear_playlist_queue()
-                            stream_url = resolve_audio_stream_url(curr_song)
-                            player.play(stream_url)
-                            with lock:
-                                buffered_song = None
-                                prebuffering_vid = None
-                            sync_prebuffered_track()
-                            threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
-                            threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
-                            message = f"⏮ Previous: {_truncate_text(curr_song.title, 26)}"
-                            msg_clear_time = time.time() + 2.0
+                            switch_to_song_optimistic(prev_song, status_msg="Previous")
+                            continue
                     elif key in ("n", "N", ">"):
                         if queue:
                             playlist_index += 1
-                            history_queue.append(curr_song)
-                            next_track = queue[0]
-                            with lock:
-                                is_buf = bool(buffered_song and buffered_song.video_id == next_track.video_id)
-                            if is_buf:
-                                # Instant switch to pre-buffered track!
-                                player.next_track()
-                                player.remove_track(0)
-                                curr_song = queue.pop(0)
-                                with lock:
-                                    buffered_song = None
-                                    prebuffering_vid = None
-                                add_to_history(curr_song)
-                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
-                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
-                                message = f"⚡ Instant Next: {curr_song.title}"
-                                msg_clear_time = time.time() + 2.0
-                            else:
-                                player.clear_playlist_queue()
-                                curr_song = queue.pop(0)
-                                with lock:
-                                    buffered_song = None
-                                    prebuffering_vid = None
-                                add_to_history(curr_song)
-                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
-                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
-                                stream_url = resolve_audio_stream_url(curr_song)
-                                player.play(stream_url)
-                                message = f"Skipping to: {curr_song.title}"
-                                msg_clear_time = time.time() + 2.0
-
+                            target = queue.pop(0)
+                            switch_to_song_optimistic(target, status_msg="Next")
                             if len(queue) < 4 and not is_fetching:
-                                threading.Thread(target=fetch_queue, args=(curr_song.video_id,), daemon=True).start()
+                                threading.Thread(target=fetch_queue, args=(target.video_id,), daemon=True).start()
+                            continue
                         else:
                             message = "Queue is empty"
                             msg_clear_time = time.time() + 1.5
@@ -752,22 +831,10 @@ def run_player_loop(
                         if search_action:
                             act_type, target, remaining = search_action
                             if act_type == "play_now":
-                                history_queue.append(curr_song)
-                                curr_song = target
                                 if remaining:
                                     queue = list(remaining)
-                                add_to_history(curr_song)
-                                stream_url = resolve_audio_stream_url(curr_song)
-                                player.clear_playlist_queue()
-                                player.play(stream_url)
-                                with lock:
-                                    buffered_song = None
-                                    prebuffering_vid = None
-                                threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
-                                threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
-                                message = f"▶ Playing: {curr_song.title}"
-                                msg_clear_time = time.time() + 2.5
-                            sync_prebuffered_track()
+                                switch_to_song_optimistic(target, status_msg="Playing")
+                                continue
                     elif key == "up":
                         if queue:
                             queue_selected_idx = max(0, queue_selected_idx - 1)
@@ -846,22 +913,11 @@ def run_player_loop(
                             queue_notif_clear = time.time() + 1.5
                     elif key in ("enter", "\r", "\n"):
                         if queue and 0 <= queue_selected_idx < len(queue):
-                            history_queue.append(curr_song)
-                            curr_song = queue.pop(queue_selected_idx)
-                            add_to_history(curr_song)
-                            stream_url = resolve_audio_stream_url(curr_song)
-                            player.clear_playlist_queue()
-                            player.play(stream_url)
-                            with lock:
-                                buffered_song = None
-                                prebuffering_vid = None
-                            sync_prebuffered_track()
-                            threading.Thread(target=fetch_segments, args=(curr_song.video_id,), daemon=True).start()
-                            threading.Thread(target=fetch_lyrics_task, args=(curr_song,), daemon=True).start()
-                            message = f"▶ Playing: {curr_song.title}"
-                            msg_clear_time = time.time() + 2.5
-                            queue_selected_idx = 0
-                            queue_scroll_offset = 0
+                            target = queue.pop(queue_selected_idx)
+                            if queue_selected_idx >= len(queue):
+                                queue_selected_idx = max(0, len(queue) - 1)
+                            switch_to_song_optimistic(target, status_msg="Playing")
+                            continue
                     elif key in ("a", "A"):
                         autoplay = not autoplay
                         message = f"Autoplay {'ON' if autoplay else 'OFF'}"
@@ -929,7 +985,15 @@ def run_player_loop(
 
                 # Refresh display & run real-time AdBlock skipping
                 status = player.get_status()
-                if ad_blocker and current_segments and status.get("state") == "playing":
+                if is_loading_stream:
+                    status = {
+                        "state": "loading",
+                        "time_pos": 0.0,
+                        "duration": float(curr_song.duration_seconds or 0.0),
+                        "volume": status.get("volume", 80),
+                        "mute": status.get("mute", False),
+                    }
+                elif ad_blocker and current_segments and status.get("state") == "playing":
                     skip_msg = check_and_skip_ads(player, status.get("time_pos", 0.0), current_segments, skipped_ranges)
                     if skip_msg:
                         message = skip_msg
@@ -1053,7 +1117,17 @@ def run_player_loop(
                     page_size=QUEUE_PAGE_SIZE,
                     notification_msg=queue_notif_msg,
                 )
-                live.update(Group(panel, queue_box))
+
+                render_elements = [panel, queue_box]
+                try:
+                    from music.offline import get_download_tracker
+                    tracker = get_download_tracker()
+                    if tracker.is_active():
+                        render_elements.append(render_download_progress_card(tracker.get_snapshot()))
+                except Exception:
+                    pass
+
+                live.update(Group(*render_elements))
 
     player.stop()
     console.print("\n[dim]Playback stopped.[/dim]\n")

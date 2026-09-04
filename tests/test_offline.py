@@ -291,10 +291,71 @@ def test_offline_search_and_collections():
     print("✓ Offline search and collection fallback tests passed")
 
 
+def test_download_tracker_and_progress_bars():
+    """Verify thread-safe DownloadTracker and UI progress bar cards render without errors."""
+    from music.offline import get_download_tracker, DownloadTracker
+    from music.ui import render_download_progress_card
+    from music.home import render_search_download_banner
+
+    tracker = DownloadTracker()
+    assert not tracker.is_active()
+
+    # 1. Single track downloading state
+    tracker.start_download("song", "Yellow - Coldplay", total_items=1)
+    assert tracker.is_active()
+    tracker.update_progress(45.5, speed="2.1 MiB/s", eta="00:06")
+    snap1 = tracker.get_snapshot()
+    assert snap1["state"] == "downloading"
+    assert snap1["percent"] == 45.5
+    assert snap1["speed"] == "2.1 MiB/s"
+
+    card1 = render_download_progress_card(snap1, width=70)
+    assert card1 is not None
+    banner1 = render_search_download_banner(snap1, width=70)
+    assert banner1 is not None
+
+    # 2. Batch album downloading state
+    tracker.start_download("album", "Parachutes", total_items=10)
+    tracker.update_track(3, "Yellow", track_percent=50.0, speed="3.4 MiB/s", eta="00:15")
+    snap2 = tracker.get_snapshot()
+    assert snap2["state"] == "downloading"
+    assert snap2["current_index"] == 3
+    assert snap2["total_items"] == 10
+    # base is 20%, item contribution is 5% -> 25%
+    assert 24.0 <= snap2["percent"] <= 26.0
+
+    card2 = render_download_progress_card(snap2, width=70)
+    assert card2 is not None
+    banner2 = render_search_download_banner(snap2, width=70)
+    assert banner2 is not None
+
+    # 3. Finished state (persists for confirmation)
+    tracker.finish(True, "✓ Downloaded 10/10 tracks for Parachutes")
+    assert tracker.is_active()  # still active within 4 seconds window
+    snap3 = tracker.get_snapshot()
+    assert snap3["state"] == "finished"
+    assert snap3["percent"] == 100.0
+
+    card3 = render_download_progress_card(snap3, width=70)
+    assert card3 is not None
+    banner3 = render_search_download_banner(snap3, width=70)
+    assert banner3 is not None
+
+    # 4. Error state
+    tracker.finish(False, "✗ Download timed out")
+    snap4 = tracker.get_snapshot()
+    assert snap4["state"] == "error"
+    card4 = render_download_progress_card(snap4, width=70)
+    assert card4 is not None
+
+    print("✓ Persistent download tracker & progress bar rendering tests passed")
+
+
 if __name__ == "__main__":
     test_offline_helpers()
     test_offline_track_and_collection_db()
     test_offline_playback_resolution()
     test_offline_lyrics_integration()
     test_offline_search_and_collections()
+    test_download_tracker_and_progress_bars()
     print("\n🎉 ALL OFFLINE MODE TESTS PASSED!")

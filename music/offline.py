@@ -631,6 +631,106 @@ def _download_lyrics_offline(song: SongItem) -> None:
         pass
 
 
+class DownloadTracker:
+    """Thread-safe persistent download progress tracker for single songs and collections."""
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.state = "idle"  # "idle", "downloading", "finished", "error"
+        self.item_type = ""  # "song", "playlist", "album", "batch"
+        self.collection_title = ""
+        self.current_title = ""
+        self.current_index = 0
+        self.total_items = 0
+        self.percent = 0.0
+        self.speed = ""
+        self.eta = ""
+        self.message = ""
+        self.error = ""
+        self.finished_at = 0.0
+
+    def start_download(self, item_type: str, collection_title: str, total_items: int = 1):
+        with self._lock:
+            self.state = "downloading"
+            self.item_type = item_type
+            self.collection_title = collection_title
+            self.current_title = collection_title if total_items == 1 else ""
+            self.current_index = 1
+            self.total_items = max(1, total_items)
+            self.percent = 0.0
+            self.speed = ""
+            self.eta = ""
+            self.message = f"Starting download of {collection_title}..."
+            self.error = ""
+            self.finished_at = 0.0
+
+    def update_track(self, current_index: int, current_title: str, track_percent: float = 0.0, speed: str = "", eta: str = ""):
+        with self._lock:
+            self.current_index = current_index
+            self.current_title = current_title
+            base_percent = ((current_index - 1) / max(1, self.total_items)) * 100.0
+            item_contribution = (track_percent / max(1, self.total_items))
+            self.percent = min(100.0, max(0.0, base_percent + item_contribution))
+            if speed:
+                self.speed = speed
+            if eta:
+                self.eta = eta
+            self.message = f"[{current_index}/{self.total_items}] {current_title}"
+
+    def update_progress(self, percent: float, speed: str = "", eta: str = ""):
+        with self._lock:
+            if self.total_items <= 1:
+                self.percent = min(100.0, max(0.0, percent))
+            else:
+                base_percent = ((self.current_index - 1) / max(1, self.total_items)) * 100.0
+                item_contribution = (percent / max(1, self.total_items))
+                self.percent = min(100.0, max(0.0, base_percent + item_contribution))
+            if speed:
+                self.speed = speed
+            if eta:
+                self.eta = eta
+
+    def finish(self, success: bool = True, message: str = ""):
+        with self._lock:
+            self.state = "finished" if success else "error"
+            self.percent = 100.0 if success else self.percent
+            self.message = message or ("✓ Download complete" if success else "✗ Download failed")
+            self.finished_at = time.time()
+
+    def is_active(self) -> bool:
+        with self._lock:
+            if self.state == "downloading":
+                return True
+            if self.state in ("finished", "error"):
+                return (time.time() - self.finished_at) < 4.0
+            return False
+
+    def get_snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "state": self.state,
+                "item_type": self.item_type,
+                "collection_title": self.collection_title,
+                "current_title": self.current_title,
+                "current_index": self.current_index,
+                "total_items": self.total_items,
+                "percent": self.percent,
+                "speed": self.speed,
+                "eta": self.eta,
+                "message": self.message,
+                "error": self.error,
+                "is_active": self.is_active(),
+            }
+
+
+_GLOBAL_DOWNLOAD_TRACKER = DownloadTracker()
+
+
+def get_download_tracker() -> DownloadTracker:
+    """Return the global download progress tracker instance."""
+    return _GLOBAL_DOWNLOAD_TRACKER
+
+
 def download_song(
     song: SongItem,
     console: Optional[Console] = None,
@@ -642,8 +742,16 @@ def download_song(
     Returns:
         (success: bool, message: str, file_path: Optional[str])
     """
+    tracker = get_download_tracker()
+    is_standalone = not tracker.is_active() or tracker.item_type == "song"
+    if is_standalone:
+        tracker.start_download("song", song.title, total_items=1)
+        tracker.update_track(1, song.title, 0.0)
+
     if is_track_offline(song.video_id):
         existing_path = get_offline_track_path(song.video_id)
+        if is_standalone:
+            tracker.finish(True, f"✓ Already offline: {song.title}")
         return True, f"Already downloaded: {song.title}", existing_path
 
     tracks_dir = get_tracks_dir()
@@ -658,40 +766,84 @@ def download_song(
     has_ffmpeg = bool(shutil.which("ffmpeg"))
     audio_fmt = "mp3" if has_ffmpeg else "m4a"
 
-    # 1. Attempt high quality MP3 / M4A conversion if ffmpeg exists
-    cmd = [
-        *base_cmd,
-        "--no-playlist",
-        "--no-warnings",
-        "-f", "bestaudio/best",
-        "-o", out_tmpl,
-    ]
+    # Progress hook for yt-dlp
+    def _progress_hook(d):
+        status = d.get("status")
+        if status == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            downloaded = d.get("downloaded_bytes", 0)
+            pct = (downloaded / total * 100.0) if total else 0.0
+            spd = d.get("_speed_str") or (f"{format_bytes(d.get('speed', 0))}/s" if d.get("speed") else "")
+            eta = d.get("_eta_str") or (f"{d.get('eta')}s" if d.get("eta") else "")
+            tracker.update_progress(pct, speed=spd, eta=eta)
+        elif status == "finished":
+            tracker.update_progress(100.0, speed="", eta="")
 
-    if has_ffmpeg:
-        cmd.extend([
-            "-x",
-            "--audio-format", "mp3",
-            "--audio-quality", "0",
-            "--add-metadata",
-        ])
-
-    cmd.append(target_url)
-
+    # Try yt_dlp python module first for real-time progress callbacks
+    ytdl_success = False
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        if proc.returncode != 0 and has_ffmpeg:
-            # Fallback: try raw bestaudio download without ffmpeg post-processing
-            cmd_fallback = [
-                *base_cmd,
-                "--no-playlist",
-                "--no-warnings",
-                "-f", "ba/b",
-                "-o", out_tmpl,
-                target_url,
+        import yt_dlp
+        ydl_opts = {
+            "format": "bestaudio/best",
+            "outtmpl": out_tmpl,
+            "quiet": True,
+            "no_warnings": True,
+            "progress_hooks": [_progress_hook],
+        }
+        if has_ffmpeg:
+            ydl_opts["postprocessors"] = [
+                {
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "mp3",
+                    "preferredquality": "0",
+                },
+                {
+                    "key": "FFmpegMetadata",
+                },
             ]
-            proc = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=timeout)
-    except Exception as e:
-        return False, f"Failed downloading {song.title}: {e}", None
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([target_url])
+        ytdl_success = True
+    except Exception:
+        ytdl_success = False
+
+    # Fallback to subprocess if python API failed
+    if not ytdl_success:
+        cmd = [
+            *base_cmd,
+            "--no-playlist",
+            "--no-warnings",
+            "-f", "bestaudio/best",
+            "-o", out_tmpl,
+        ]
+        if has_ffmpeg:
+            cmd.extend([
+                "-x",
+                "--audio-format", "mp3",
+                "--audio-quality", "0",
+                "--add-metadata",
+            ])
+        cmd.append(target_url)
+
+        try:
+            tracker.update_progress(20.0)
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+            if proc.returncode != 0 and has_ffmpeg:
+                tracker.update_progress(40.0)
+                cmd_fallback = [
+                    *base_cmd,
+                    "--no-playlist",
+                    "--no-warnings",
+                    "-f", "ba/b",
+                    "-o", out_tmpl,
+                    target_url,
+                ]
+                proc = subprocess.run(cmd_fallback, capture_output=True, text=True, timeout=timeout)
+            tracker.update_progress(90.0)
+        except Exception as e:
+            if is_standalone:
+                tracker.finish(False, f"✗ Download failed: {e}")
+            return False, f"Failed downloading {song.title}: {e}", None
 
     # Locate downloaded file on disk
     found_file: Optional[Path] = None
@@ -701,6 +853,8 @@ def download_song(
             break
 
     if not found_file or not found_file.exists() or found_file.stat().st_size == 0:
+        if is_standalone:
+            tracker.finish(False, "✗ No audio file generated")
         return False, f"Download failed for '{song.title}' (no audio file generated)", None
 
     file_size = found_file.stat().st_size
@@ -718,6 +872,10 @@ def download_song(
     # Download lyrics in background
     threading.Thread(target=_download_lyrics_offline, args=(song,), daemon=True).start()
 
+    tracker.update_progress(100.0)
+    if is_standalone:
+        tracker.finish(True, f"✓ Downloaded: {song.title} ({format_bytes(file_size)})")
+
     return True, f"✓ Downloaded: {song.title} ({format_bytes(file_size)})", actual_path
 
 
@@ -728,58 +886,65 @@ def download_songs_batch(
     collection_id: str = "",
     author: str = "",
     console: Optional[Console] = None,
+    show_cli_progress: bool = True,
 ) -> Tuple[int, int, List[SongItem]]:
-    """Download multiple tracks with a live interactive Rich progress bar.
+    """Download multiple tracks with persistent DownloadTracker and live Rich progress bar.
 
     Returns:
         (downloaded_count, failed_count, successful_songs)
     """
-    con = console or Console()
-    if not songs:
-        con.print("[yellow]No tracks provided to download.[/yellow]")
-        return 0, 0, []
+    tracker = get_download_tracker()
+    tracker.start_download(collection_type, collection_title, total_items=len(songs))
 
-    con.print(
-        f"\n[bold cyan]⬇ Downloading {len(songs)} tracks for {collection_type.capitalize()}:[/bold cyan] "
-        f"[bold white]{collection_title}[/bold white]"
-    )
+    if not songs:
+        tracker.finish(False, "No tracks provided")
+        return 0, 0, []
 
     success_count = 0
     fail_count = 0
     successful_tracks: List[SongItem] = []
 
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[bold cyan]{task.fields[status]}[/bold cyan]"),
-        BarColumn(bar_width=35, complete_style="bright_cyan", finished_style="green"),
-        TaskProgressColumn(),
-        MofNCompleteColumn(),
-        TimeRemainingColumn(),
-        console=con,
-    )
-
-    with progress:
-        task_id = progress.add_task(
-            "downloading",
-            total=len(songs),
-            status=f"Starting download...",
+    # If running from CLI command (console provided or interactive stdout), show Rich progress bar
+    if show_cli_progress and console:
+        con = console
+        con.print(
+            f"\n[bold cyan]⬇ Downloading {len(songs)} tracks for {collection_type.capitalize()}:[/bold cyan] "
+            f"[bold white]{collection_title}[/bold white]"
         )
-
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[bold cyan]{task.fields[status]}[/bold cyan]"),
+            BarColumn(bar_width=35, complete_style="bright_cyan", finished_style="green"),
+            TaskProgressColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=con,
+        )
+        with progress:
+            task_id = progress.add_task("downloading", total=len(songs), status="Starting download...")
+            for idx, song in enumerate(songs, 1):
+                short_title = song.title[:30] + "…" if len(song.title) > 30 else song.title
+                progress.update(task_id, status=f"[{idx}/{len(songs)}] {short_title}")
+                tracker.update_track(idx, song.title, 0.0)
+                ok, msg, fpath = download_song(song, console=con, show_status=False)
+                if ok:
+                    success_count += 1
+                    successful_tracks.append(song)
+                else:
+                    fail_count += 1
+                tracker.update_track(idx, song.title, 100.0)
+                progress.advance(task_id)
+    else:
+        # Background / TUI mode: purely update DownloadTracker
         for idx, song in enumerate(songs, 1):
-            short_title = song.title[:30] + "…" if len(song.title) > 30 else song.title
-            progress.update(
-                task_id,
-                status=f"[{idx}/{len(songs)}] {short_title}",
-            )
-
-            ok, msg, fpath = download_song(song, console=con, show_status=False)
+            tracker.update_track(idx, song.title, 0.0)
+            ok, msg, fpath = download_song(song, show_status=False)
             if ok:
                 success_count += 1
                 successful_tracks.append(song)
             else:
                 fail_count += 1
-
-            progress.advance(task_id)
+            tracker.update_track(idx, song.title, 100.0)
 
     # Save collection record if an ID was provided
     if collection_id and successful_tracks:
@@ -791,12 +956,18 @@ def download_songs_batch(
             track_ids=[t.video_id for t in successful_tracks],
         )
 
-    con.print(
-        f"[bold green]✓ Finished downloading {collection_title}:[/bold green] "
-        f"[cyan]{success_count} succeeded[/cyan]" +
-        (f", [red]{fail_count} failed[/red]" if fail_count > 0 else "") +
-        f" ([dim]{format_bytes(sum(os.path.getsize(get_offline_track_path(t.video_id) or '') for t in successful_tracks if is_track_offline(t.video_id)))} saved locally[/dim])"
+    tracker.finish(
+        success_count > 0,
+        f"✓ Downloaded {success_count}/{len(songs)} tracks for {collection_title}",
     )
+
+    if show_cli_progress and console:
+        console.print(
+            f"[bold green]✓ Finished downloading {collection_title}:[/bold green] "
+            f"[cyan]{success_count} succeeded[/cyan]" +
+            (f", [red]{fail_count} failed[/red]" if fail_count > 0 else "") +
+            f" ([dim]{format_bytes(sum(os.path.getsize(get_offline_track_path(t.video_id) or '') for t in successful_tracks if is_track_offline(t.video_id)))} saved locally[/dim])"
+        )
 
     return success_count, fail_count, successful_tracks
 
