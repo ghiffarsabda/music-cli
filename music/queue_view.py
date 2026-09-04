@@ -116,6 +116,7 @@ def render_queue_screen(
             "[bold cyan]↑/↓[/bold cyan] Select   [dim]•[/dim]   "
             "[bold cyan]Shift+↑/↓ (J/K)[/bold cyan] Reorder   [dim]•[/dim]   "
             "[bold red]x / Del[/bold red] Remove   [dim]•[/dim]   "
+            "[bold green]Shift+D[/bold green] Download   [dim]•[/dim]   "
             "[bold cyan]Enter[/bold cyan] Play Now   [dim]•[/dim]   "
             "[bold white]Esc / Tab[/bold white] Back"
         )
@@ -238,14 +239,59 @@ def run_queue_view(
                         notification_msg = f"[bold green]▼ Moved down: {truncate_str(queue[selected_idx].title, 32)}[/bold green]"
                         notif_clear_time = time.time() + 1.5
 
-                # Remove from Queue: 'x' or Delete or Backspace or 'd'
-                elif key in ("x", "X", "delete", "\x7f", "\x08", "d", "D"):
+                # Remove from Queue: 'x' or Delete or Backspace
+                elif key in ("x", "X", "delete", "\x7f", "\x08"):
                     if queue and 0 <= selected_idx < len(queue):
                         removed = queue.pop(selected_idx)
                         if selected_idx >= len(queue):
                             selected_idx = max(0, len(queue) - 1)
                         notification_msg = f"[bold yellow]✗ Removed from queue: {truncate_str(removed.title, 30)}[/bold yellow]"
                         notif_clear_time = time.time() + 1.8
+
+                # Download Currently Playing Track: 'd'
+                elif key == "d":
+                    try:
+                        from music.offline import download_song, is_track_offline
+                        if is_track_offline(curr_song.video_id):
+                            notification_msg = f"[bold yellow]💾 '{truncate_str(curr_song.title, 26)}' is already offline[/bold yellow]"
+                            notif_clear_time = time.time() + 2.0
+                        else:
+                            notification_msg = f"[bold green]⬇ Downloading '{truncate_str(curr_song.title, 24)}'...[/bold green]"
+                            notif_clear_time = time.time() + 3.0
+                            def _bg_curr_dl(t):
+                                try:
+                                    download_song(t, show_status=False)
+                                except Exception:
+                                    pass
+                            threading.Thread(target=_bg_curr_dl, args=(curr_song,), daemon=True).start()
+                    except Exception as e:
+                        notification_msg = f"[bold red]Download failed: {e}[/bold red]"
+                        notif_clear_time = time.time() + 2.0
+
+                # Download Track from Queue: Shift+D ('D')
+                elif key == "D":
+                    if queue and 0 <= selected_idx < len(queue):
+                        target_song = queue[selected_idx]
+                        try:
+                            from music.offline import download_song, is_track_offline
+                            if is_track_offline(target_song.video_id):
+                                notification_msg = f"[bold yellow]💾 '{truncate_str(target_song.title, 26)}' is already offline[/bold yellow]"
+                                notif_clear_time = time.time() + 2.0
+                            else:
+                                notification_msg = f"[bold green]⬇ Downloading '{truncate_str(target_song.title, 24)}'...[/bold green]"
+                                notif_clear_time = time.time() + 3.0
+                                def _bg_q_dl(t):
+                                    try:
+                                        download_song(t, show_status=False)
+                                    except Exception:
+                                        pass
+                                threading.Thread(target=_bg_q_dl, args=(target_song,), daemon=True).start()
+                        except Exception as e:
+                            notification_msg = f"[bold red]Download failed: {e}[/bold red]"
+                            notif_clear_time = time.time() + 2.0
+                    else:
+                        notification_msg = "[bold yellow]Queue is empty[/bold yellow]"
+                        notif_clear_time = time.time() + 2.0
 
                 # Clear entire Queue: 'c' or 'C'
                 elif key in ("c", "C"):

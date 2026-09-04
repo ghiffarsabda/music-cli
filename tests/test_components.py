@@ -328,6 +328,20 @@ def test_search_while_playing():
         action_dialog_idx=1,
     )
     assert screen_dialog_1 is not None
+
+    screen_dialog_2 = render_home_screen(
+        query="cold",
+        cursor_on=True,
+        filter_mode="Tracks",
+        items=items,
+        selected_idx=0,
+        scroll_offset=0,
+        is_searching=False,
+        now_playing=(np_song, "01:15 / 03:50", 2),
+        action_dialog_item=("Yellow", "Coldplay", "track"),
+        action_dialog_idx=2,
+    )
+    assert screen_dialog_2 is not None
     print("✓ Search while playing UI & action dialog tests passed")
 
 

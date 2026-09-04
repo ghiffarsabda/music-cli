@@ -38,6 +38,7 @@ music
 - A menu will pop up asking what you want to do:
   - Press <kbd>1</kbd> or <kbd>Enter</kbd> to **Play Now**
   - Press <kbd>2</kbd> to **Add to Queue** (keeps your current music playing)
+  - Press <kbd>3</kbd> or <kbd>d</kbd> to **Download track, album, or playlist** for offline listening
 
 ---
 
@@ -89,13 +90,14 @@ While music is playing, control everything using your keyboard:
 | <kbd>→</kbd> / <kbd>←</kbd> | Fast-forward / rewind by **5 seconds** |
 | <kbd>+</kbd> / <kbd>-</kbd> | Increase / decrease volume by **5%** |
 | <kbd>M</kbd> | **Mute / Unmute** |
-| <kbd>D</kbd> | **Download current song** to offline storage |
+| <kbd>d</kbd> | **Download currently playing song** to offline storage |
 | <kbd>Q</kbd> | **Quit** and close the player |
 
 ### 🎶 Managing the Queue
 The **Up Next Queue** is always visible right below your player box:
 - <kbd>↑</kbd> / <kbd>↓</kbd> — Select a song in the queue
 - <kbd>Shift + ↑</kbd> / <kbd>Shift + ↓</kbd> (or <kbd>K</kbd> / <kbd>J</kbd>) — **Move song up or down** in the queue
+- <kbd>Shift + D</kbd> — **Download highlighted song** from the queue
 - <kbd>x</kbd> or <kbd>Del</kbd> — **Remove** the highlighted song from the queue
 - <kbd>Enter</kbd> — **Play now** (jump straight to this song)
 - <kbd>c</kbd> — **Clear** the entire upcoming queue

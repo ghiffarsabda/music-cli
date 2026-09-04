@@ -380,7 +380,7 @@ def render_player_panel(
         r"[bold white]\[/][/bold white] Search   "
         r"[bold white][P][/bold white] Prev   "
         r"[bold white][N][/bold white] Next   "
-        r"[bold white][D][/bold white] Download   "
+        r"[bold white][d][/bold white] Download   "
         r"[bold white][←/→][/bold white] ±5s   "
         r"[bold white][M][/bold white] Mute   "
         r"[bold white][Q][/bold white] Quit"
@@ -476,7 +476,7 @@ def render_queue_panel(
             "[bold cyan]↑/↓[/bold cyan] Select   [dim]•[/dim]   "
             "[bold cyan]Shift+↑/↓ (J/K)[/bold cyan] Reorder   [dim]•[/dim]   "
             "[bold red]x / Del[/bold red] Remove   [dim]•[/dim]   "
-            "[bold cyan]d[/bold cyan] Download   [dim]•[/dim]   "
+            "[bold green]Shift+D[/bold green] Download   [dim]•[/dim]   "
             "[bold cyan]Enter[/bold cyan] Play Now"
         )
         elements.append(Text(""))
@@ -796,7 +796,7 @@ def run_player_loop(
                             sync_prebuffered_track()
                             queue_notif_msg = f"[bold yellow]✗ Removed: {_truncate_text(removed.title, 26)}[/bold yellow]"
                             queue_notif_clear = time.time() + 1.5
-                    elif key in ("d", "D"):
+                    elif key == "d":
                         try:
                             from music.offline import download_song, is_track_offline
                             if is_track_offline(curr_song.video_id):
@@ -806,10 +806,36 @@ def run_player_loop(
                                 message = f"⬇ Downloading '{_truncate_text(curr_song.title, 20)}'..."
                                 msg_clear_time = time.time() + 3.0
                                 def _bg_download_task(target_song):
-                                    download_song(target_song, show_status=False)
+                                    try:
+                                        download_song(target_song, show_status=False)
+                                    except Exception:
+                                        pass
                                 threading.Thread(target=_bg_download_task, args=(curr_song,), daemon=True).start()
                         except Exception:
                             pass
+                    elif key == "D":
+                        # Shift+D: Download highlighted track from queue list
+                        if queue and 0 <= queue_selected_idx < len(queue):
+                            target_q_song = queue[queue_selected_idx]
+                            try:
+                                from music.offline import download_song, is_track_offline
+                                if is_track_offline(target_q_song.video_id):
+                                    queue_notif_msg = f"[bold yellow]💾 '{_truncate_text(target_q_song.title, 22)}' is already offline[/bold yellow]"
+                                    queue_notif_clear = time.time() + 2.0
+                                else:
+                                    queue_notif_msg = f"[bold green]⬇ Downloading '{_truncate_text(target_q_song.title, 20)}'...[/bold green]"
+                                    queue_notif_clear = time.time() + 3.0
+                                    def _bg_q_download_task(t_song):
+                                        try:
+                                            download_song(t_song, show_status=False)
+                                        except Exception:
+                                            pass
+                                    threading.Thread(target=_bg_q_download_task, args=(target_q_song,), daemon=True).start()
+                            except Exception:
+                                pass
+                        else:
+                            queue_notif_msg = "[bold yellow]Queue is empty[/bold yellow]"
+                            queue_notif_clear = time.time() + 2.0
                     elif key in ("c", "C"):
                         if queue:
                             queue.clear()

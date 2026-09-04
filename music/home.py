@@ -688,13 +688,16 @@ def render_home_screen(
 
     dialog_panel = None
     if action_dialog_item:
-        act_title, act_sub, act_kind = action_dialog_item
+        act_title = action_dialog_item[0]
+        act_sub = action_dialog_item[1] if len(action_dialog_item) > 1 else ""
+        act_kind = action_dialog_item[2] if len(action_dialog_item) > 2 else ""
         action_table = Table.grid(padding=(0, 2))
         action_table.add_column(width=3, justify="center")
         action_table.add_column(width=inner_width - 3, no_wrap=True)
 
         is_act0 = (action_dialog_idx == 0)
         is_act1 = (action_dialog_idx == 1)
+        is_act2 = (action_dialog_idx == 2)
 
         prefix0 = "[bold cyan]▶[/bold cyan]" if is_act0 else "  "
         text0 = (
@@ -710,8 +713,26 @@ def render_home_screen(
             else "[bold white]2. Add to Queue[/bold white] [dim](keep current music playing uninterrupted)[/dim]"
         )
 
+        if act_kind == "album":
+            dl_label = "3. Download Album"
+            dl_hint = "(download all album tracks for offline listening)"
+        elif act_kind == "playlist":
+            dl_label = "3. Download Playlist"
+            dl_hint = "(download all playlist tracks for offline listening)"
+        else:
+            dl_label = "3. Download Track"
+            dl_hint = "(save track to local storage for offline playback)"
+
+        prefix2 = "[bold yellow]▶[/bold yellow]" if is_act2 else "  "
+        text2 = (
+            f"[bold bright_white on blue] {dl_label} [/bold bright_white on blue] [dim]{dl_hint}[/dim]"
+            if is_act2
+            else f"[bold white]{dl_label}[/bold white] [dim]{dl_hint}[/dim]"
+        )
+
         action_table.add_row(prefix0, text0)
         action_table.add_row(prefix1, text1)
+        action_table.add_row(prefix2, text2)
 
         dialog_panel = Panel(
             action_table,
@@ -743,6 +764,7 @@ def render_home_screen(
                 "[bold cyan]Enter[/bold cyan] Confirm   [dim]•[/dim]   "
                 "[bold white]1[/bold white] Play Now   [dim]•[/dim]   "
                 "[bold white]2[/bold white] Add to Queue   [dim]•[/dim]   "
+                "[bold white]3[/bold white] Download   [dim]•[/dim]   "
                 "[bold white]Esc[/bold white] Cancel"
             )
         )
@@ -974,19 +996,21 @@ def run_home_view(
                 # Any keystroke cancels in-flight pre-warmer to save bandwidth/CPU
                 prewarmer.cancel()
 
-                # Action Dialog handling when choosing Play Now vs Add to Queue
+                # Action Dialog handling when choosing Play Now vs Add to Queue vs Download
                 if action_dialog_item is not None:
                     if key in ("up", "k", "K"):
-                        action_dialog_idx = 0
+                        action_dialog_idx = (action_dialog_idx - 1) % 3
                         continue
                     elif key in ("down", "j", "J"):
-                        action_dialog_idx = 1
+                        action_dialog_idx = (action_dialog_idx + 1) % 3
                         continue
                     elif key in ("1", "p", "P") or (key in ("\r", "\n", "enter") and action_dialog_idx == 0):
-                        chosen = action_dialog_item[3]
+                        chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
                         action_dialog_item = None
                         action_dialog_idx = 0
                         running = False
+                        if chosen is None:
+                            continue
                         if chosen.kind in ("track", "history"):
                             return ("play_now", chosen.data, list(now_playing_queue) if now_playing_queue else [])
                         elif chosen.kind in ("child_track", "playlist_track"):
@@ -1008,9 +1032,11 @@ def run_home_view(
                             last_key_time = time.time()
                             continue
                     elif key in ("2", "a", "A", "q", "Q") or (key in ("\r", "\n", "enter") and action_dialog_idx == 1):
-                        chosen = action_dialog_item[3]
+                        chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
                         action_dialog_item = None
                         action_dialog_idx = 0
+                        if chosen is None:
+                            continue
                         target_queue = now_playing_queue if now_playing_queue is not None else []
                         if chosen.kind in ("track", "history"):
                             target_queue.append(chosen.data)
@@ -1028,6 +1054,90 @@ def run_home_view(
                             target_queue.extend(tracks)
                             notification_msg = f"[bold green]✓ Added {len(tracks)} playlist tracks to queue[/bold green] ([cyan]{len(target_queue)} in queue[/cyan])"
                         notif_clear_time = time.time() + 2.5
+                        continue
+                    elif key in ("3", "d", "D") or (key in ("\r", "\n", "enter") and action_dialog_idx == 2):
+                        chosen = action_dialog_item[3] if len(action_dialog_item) > 3 else None
+                        action_dialog_item = None
+                        action_dialog_idx = 0
+                        if chosen is None:
+                            continue
+                        try:
+                            from music.offline import (
+                                download_song,
+                                download_songs_batch,
+                                save_offline_collection,
+                                is_track_offline,
+                            )
+                            if chosen.kind in ("track", "history"):
+                                target_track = chosen.data
+                                if is_track_offline(target_track.video_id):
+                                    notification_msg = f"[bold yellow]💾 '{truncate_str(target_track.title, 26)}' is already offline[/bold yellow]"
+                                else:
+                                    notification_msg = f"[bold green]⬇ Downloading '{truncate_str(target_track.title, 24)}'...[/bold green]"
+                                    def _bg_dl_track(t):
+                                        try:
+                                            download_song(t, show_status=False)
+                                        except Exception:
+                                            pass
+                                    threading.Thread(target=_bg_dl_track, args=(target_track,), daemon=True).start()
+                            elif chosen.kind in ("child_track", "playlist_track"):
+                                c_data = chosen.data
+                                target_track = c_data.song
+                                if is_track_offline(target_track.video_id):
+                                    notification_msg = f"[bold yellow]💾 '{truncate_str(target_track.title, 26)}' is already offline[/bold yellow]"
+                                else:
+                                    notification_msg = f"[bold green]⬇ Downloading '{truncate_str(target_track.title, 24)}'...[/bold green]"
+                                    def _bg_dl_track(t):
+                                        try:
+                                            download_song(t, show_status=False)
+                                        except Exception:
+                                            pass
+                                    threading.Thread(target=_bg_dl_track, args=(target_track,), daemon=True).start()
+                            elif chosen.kind == "album":
+                                album_data = chosen.data
+                                notification_msg = f"[bold green]⬇ Downloading album '{truncate_str(chosen.title, 24)}'...[/bold green]"
+                                def _bg_dl_album(a_item):
+                                    try:
+                                        from music.search import get_album_tracks
+                                        _, tracks = get_album_tracks(a_item.browse_id)
+                                        if tracks:
+                                            download_songs_batch(tracks, collection_type="album", collection_name=a_item.title)
+                                            save_offline_collection(
+                                                collection_id=a_item.browse_id,
+                                                collection_type="album",
+                                                title=a_item.title,
+                                                artist=getattr(a_item, "artist", "") or "",
+                                                track_count=len(tracks),
+                                                track_ids=[t.video_id for t in tracks],
+                                            )
+                                    except Exception:
+                                        pass
+                                threading.Thread(target=_bg_dl_album, args=(album_data,), daemon=True).start()
+                            elif chosen.kind == "playlist":
+                                pl_data = chosen.data
+                                notification_msg = f"[bold green]⬇ Downloading playlist '{truncate_str(chosen.title, 24)}'...[/bold green]"
+                                def _bg_dl_playlist(p_item):
+                                    try:
+                                        from music.search import get_playlist_tracks
+                                        _, tracks = get_playlist_tracks(p_item.playlist_id)
+                                        if tracks:
+                                            download_songs_batch(tracks, collection_type="playlist", collection_name=p_item.title)
+                                            save_offline_collection(
+                                                collection_id=p_item.playlist_id,
+                                                collection_type="playlist",
+                                                title=p_item.title,
+                                                artist=getattr(p_item, "author", "") or "",
+                                                track_count=len(tracks),
+                                                track_ids=[t.video_id for t in tracks],
+                                            )
+                                    except Exception:
+                                        pass
+                                threading.Thread(target=_bg_dl_playlist, args=(pl_data,), daemon=True).start()
+                            else:
+                                notification_msg = f"[bold yellow]Unable to download {chosen.kind}[/bold yellow]"
+                        except Exception as e:
+                            notification_msg = f"[bold red]Download failed to start: {e}[/bold red]"
+                        notif_clear_time = time.time() + 3.0
                         continue
                     elif key in ("escape", "quit"):
                         action_dialog_item = None
