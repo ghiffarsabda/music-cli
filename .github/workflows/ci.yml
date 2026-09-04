@@ -46,6 +46,7 @@ jobs:
         run: |
           choco install mpv -y
           Add-Content $env:GITHUB_PATH "C:\ProgramData\chocolatey\bin" -Encoding utf8
+          Add-Content $env:GITHUB_PATH "C:\ProgramData\chocolatey\lib\mpvio.install\tools" -Encoding utf8
 
       - name: Test One-line Installer (Linux & macOS)
         if: runner.os != 'Windows'
@@ -66,7 +67,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            export PATH="/c/ProgramData/chocolatey/bin:$PATH"
+            export PATH="/c/ProgramData/chocolatey/bin:/c/ProgramData/chocolatey/lib/mpvio.install/tools:$PATH"
           fi
           pip install -e .
           python tests/test_components.py

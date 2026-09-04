@@ -78,6 +78,7 @@ class MpvPlayer:
         if not mpv_bin and sys.platform == "win32":
             common_mpv_paths = [
                 r"C:\ProgramData\chocolatey\bin\mpv.exe",
+                r"C:\ProgramData\chocolatey\lib\mpvio.install\tools\mpv.exe",
                 r"C:\ProgramData\chocolatey\lib\mpv\tools\mpv.exe",
                 r"C:\tools\mpv\mpv.exe",
                 os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpv.exe"),
@@ -88,6 +89,11 @@ class MpvPlayer:
                 if os.path.exists(p):
                     mpv_bin = p
                     break
+            if not mpv_bin and os.path.exists(r"C:\ProgramData\chocolatey"):
+                for root, _, files in os.walk(r"C:\ProgramData\chocolatey"):
+                    if "mpv.exe" in files:
+                        mpv_bin = os.path.join(root, "mpv.exe")
+                        break
 
         if not mpv_bin:
             raise RuntimeError("mpv executable not found. Please ensure mpv is installed.")
