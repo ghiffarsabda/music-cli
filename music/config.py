@@ -140,6 +140,153 @@ def find_node_bin() -> str:
     return ""
 
 
+def find_mpv_bin() -> str:
+    """Find the best available mpv executable path across platforms.
+
+    Checks in priority order:
+    1. User configured path in config.json
+    2. System PATH (shutil.which)
+    3. Active Python environment / virtualenv Scripts directory
+    4. Windows Registry (App Paths and Uninstall entries)
+    5. Standard user & system install locations across OSes
+    """
+    cfg_val = get_config_val("mpv_path", "")
+    if cfg_val and cfg_val != "mpv":
+        if _is_executable(cfg_val):
+            return cfg_val
+        found = shutil.which(cfg_val)
+        if found:
+            return found
+
+    # Check system PATH
+    found = shutil.which("mpv")
+    if found:
+        return found
+
+    # Check active virtualenv / python Scripts directory
+    exe_dir = os.path.dirname(sys.executable)
+    names = ["mpv.exe", "mpv"] if sys.platform == "win32" else ["mpv"]
+    for n in names:
+        cand = os.path.join(exe_dir, n)
+        if _is_executable(cand):
+            return cand
+
+    # On Windows: Deep Registry & directory inspection
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            # 1. Check App Paths in HKCU and HKLM
+            for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(root, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\mpv.exe") as k:
+                        val, _ = winreg.QueryValueEx(k, "")
+                        if val and _is_executable(val):
+                            return val
+                except OSError:
+                    pass
+
+            # 2. Check Uninstall keys for Inno Setup / WinGet / standard installers
+            for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                for subkey_path in (
+                    r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                    r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+                ):
+                    try:
+                        with winreg.OpenKey(root, subkey_path) as parent:
+                            num_subkeys, _, _ = winreg.QueryInfoKey(parent)
+                            for i in range(num_subkeys):
+                                try:
+                                    subkey_name = winreg.EnumKey(parent, i)
+                                    with winreg.OpenKey(parent, subkey_name) as app_key:
+                                        try:
+                                            disp, _ = winreg.QueryValueEx(app_key, "DisplayName")
+                                        except OSError:
+                                            disp = ""
+                                        if "mpv" in disp.lower() or "mpv" in subkey_name.lower():
+                                            for loc_key in ("InstallLocation", "Inno Setup: App Path"):
+                                                try:
+                                                    loc, _ = winreg.QueryValueEx(app_key, loc_key)
+                                                    if loc:
+                                                        cand = os.path.join(loc, "mpv.exe")
+                                                        if _is_executable(cand):
+                                                            return cand
+                                                except OSError:
+                                                    pass
+                                            try:
+                                                icon, _ = winreg.QueryValueEx(app_key, "DisplayIcon")
+                                                if icon:
+                                                    clean_icon = icon.split(",")[0].strip('"')
+                                                    if clean_icon.lower().endswith("mpv.exe") and _is_executable(clean_icon):
+                                                        return clean_icon
+                                            except OSError:
+                                                pass
+                                except OSError:
+                                    continue
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+
+        # 3. Known common Windows paths
+        win_candidates = [
+            os.path.expandvars(r"%ProgramFiles%\mpv\mpv.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\mpv\mpv.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\mpv\mpv.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\mpv\mpv.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpv.exe"),
+            os.path.expandvars(r"%ProgramFiles%\WinGet\Links\mpv.exe"),
+            os.path.expandvars(r"%APPDATA%\mpv\mpv.exe"),
+            r"C:\mpv\mpv.exe",
+            r"C:\tools\mpv\mpv.exe",
+            r"C:\ProgramData\chocolatey\bin\mpv.exe",
+            r"C:\ProgramData\chocolatey\lib\mpvio.install\tools\mpv.exe",
+            r"C:\ProgramData\chocolatey\lib\mpv\tools\mpv.exe",
+            os.path.expandvars(r"%USERPROFILE%\scoop\apps\mpv\current\mpv.exe"),
+            r"C:\scoop\apps\mpv\current\mpv.exe",
+        ]
+        for c in win_candidates:
+            if _is_executable(c):
+                return c
+
+        # 4. WinGet package directories
+        for wg_dir in (
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages"),
+            os.path.expandvars(r"%ProgramFiles%\WinGet\Packages"),
+            os.path.expandvars(r"%ProgramData%\Microsoft\WinGet\Packages"),
+        ):
+            if os.path.exists(wg_dir):
+                for root_dir, _, files in os.walk(wg_dir):
+                    if "mpv.exe" in files:
+                        cand = os.path.join(root_dir, "mpv.exe")
+                        if _is_executable(cand):
+                            return cand
+
+    elif sys.platform == "darwin":
+        mac_candidates = [
+            "/opt/homebrew/bin/mpv",
+            "/usr/local/bin/mpv",
+            os.path.expanduser("~/.local/bin/mpv"),
+        ]
+        for p in mac_candidates:
+            if _is_executable(p):
+                return p
+    else:
+        # Linux / Unix
+        linux_candidates = [
+            "/usr/bin/mpv",
+            "/usr/local/bin/mpv",
+            os.path.expanduser("~/.local/bin/mpv"),
+            "/var/lib/flatpak/exports/bin/io.mpv.Mpv",
+            os.path.expanduser("~/.local/share/flatpak/exports/bin/io.mpv.Mpv"),
+        ]
+        for p in linux_candidates:
+            if _is_executable(p):
+                return p
+
+    return ""
+
+
 DEFAULT_CONFIG: Dict[str, Any] = {
     "auth_mode": "none",  # 'none', 'browser', 'cookies_file'
     "browser": "chrome",  # 'chrome', 'firefox', 'brave', 'edge', etc.
@@ -152,6 +299,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     "autoplay": True,  # Autoplay next track when song finishes
     "ad_blocker": True,  # Built-in ad & sponsor segment blocker (uBlock/SponsorBlock)
     "show_lyrics": True,  # Time-synchronized lyrics (Karaoke display)
+    "mpv_path": "",
     "yt_dlp_path": detect_executable("yt-dlp", ["~/.local/bin/yt-dlp", "/usr/bin/yt-dlp"]),
     "node_path": detect_executable("node", ["~/.local/bin/node", "/usr/bin/node"]),
 }

@@ -122,56 +122,93 @@ $pyVer = & $pyExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_
 Write-Host "✓ Python $pyVer ready" -ForegroundColor Green
 
 # 2. Detect or Automatically Install mpv
-$mpvExe = $null
-$mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
-if ($mpvCmd) {
-    $mpvExe = $mpvCmd.Source
-}
+function Find-MpvExe {
+    $cmd = Get-Command mpv -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
 
-$mpvCandidates = @(
-    "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe",
-    "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
-    "$env:ProgramFiles\mpv\mpv.exe",
-    "${env:ProgramFiles(x86)}\mpv\mpv.exe",
-    "C:\ProgramData\chocolatey\bin\mpv.exe",
-    "C:\mpv\mpv.exe",
-    "C:\tools\mpv\mpv.exe",
-    "$env:USERPROFILE\scoop\apps\mpv\current\mpv.exe"
-)
-if (-not $mpvExe) {
-    foreach ($cand in $mpvCandidates) {
-        if (Test-Path $cand) {
-            $mpvExe = $cand
-            break
+    # 1. Check App Paths in Windows Registry
+    $regLocations = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\mpv.exe",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\mpv.exe"
+    )
+    foreach ($reg in $regLocations) {
+        if (Test-Path $reg) {
+            $val = (Get-ItemProperty -Path $reg -ErrorAction SilentlyContinue).'(default)'
+            if ($val -and (Test-Path $val)) { return $val }
         }
     }
+
+    # 2. Check Uninstall keys in Windows Registry (Inno Setup, WinGet, standard installers)
+    $uninstallPaths = @(
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    foreach ($unPath in $uninstallPaths) {
+        $entries = Get-ItemProperty -Path $unPath -ErrorAction SilentlyContinue
+        foreach ($e in $entries) {
+            if ($e.DisplayName -like "*mpv*" -or $e.PSChildName -like "*mpv*") {
+                if ($e.InstallLocation -and (Test-Path (Join-Path $e.InstallLocation "mpv.exe"))) {
+                    return (Join-Path $e.InstallLocation "mpv.exe")
+                }
+                if ($e.'Inno Setup: App Path' -and (Test-Path (Join-Path $e.'Inno Setup: App Path' "mpv.exe"))) {
+                    return (Join-Path $e.'Inno Setup: App Path' "mpv.exe")
+                }
+                if ($e.DisplayIcon -and ($e.DisplayIcon -like "*mpv.exe*")) {
+                    $cleanIcon = $e.DisplayIcon.Split(',')[0].Trim('"')
+                    if (Test-Path $cleanIcon) { return $cleanIcon }
+                }
+            }
+        }
+    }
+
+    # 3. Known common install locations
+    $candidates = @(
+        "$env:ProgramFiles\mpv\mpv.exe",
+        "${env:ProgramFiles(x86)}\mpv\mpv.exe",
+        "$env:LOCALAPPDATA\Programs\mpv\mpv.exe",
+        "$env:LOCALAPPDATA\mpv\mpv.exe",
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Links\mpv.exe",
+        "$env:ProgramFiles\WinGet\Links\mpv.exe",
+        "$env:APPDATA\mpv\mpv.exe",
+        "C:\mpv\mpv.exe",
+        "C:\tools\mpv\mpv.exe",
+        "C:\ProgramData\chocolatey\bin\mpv.exe",
+        "C:\ProgramData\chocolatey\lib\mpvio.install\tools\mpv.exe",
+        "C:\ProgramData\chocolatey\lib\mpv\tools\mpv.exe",
+        "$env:USERPROFILE\scoop\apps\mpv\current\mpv.exe",
+        "C:\scoop\apps\mpv\current\mpv.exe"
+    )
+    foreach ($cand in $candidates) {
+        if (Test-Path $cand) { return $cand }
+    }
+
+    # 4. Search WinGet package directories
+    $wgDirs = @(
+        "$env:LOCALAPPDATA\Microsoft\WinGet\Packages",
+        "$env:ProgramFiles\WinGet\Packages",
+        "$env:ProgramData\Microsoft\WinGet\Packages"
+    )
+    foreach ($wg in $wgDirs) {
+        if (Test-Path $wg) {
+            $found = Get-ChildItem -Path $wg -Filter "mpv.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { return $found.FullName }
+        }
+    }
+
+    return $null
 }
-if (-not $mpvExe -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages")) {
-    $found = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "mpv.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($found) { $mpvExe = $found.FullName }
-}
+
+$mpvExe = Find-MpvExe
 
 if (-not $mpvExe) {
     Write-Host "🎵 Setting up audio player..." -ForegroundColor Magenta
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         try {
-            winget install --id shinchiro.mpv -e --silent --accept-package-agreements --accept-source-agreements | Out-Null
+            winget install --id shinchiro.mpv -e --silent --force --accept-package-agreements --accept-source-agreements | Out-Null
         } catch {}
         Refresh-EnvPath
-        $cmdCheck = Get-Command mpv -ErrorAction SilentlyContinue
-        if ($cmdCheck) { $mpvExe = $cmdCheck.Source }
-        if (-not $mpvExe) {
-            foreach ($cand in $mpvCandidates) {
-                if (Test-Path $cand) {
-                    $mpvExe = $cand
-                    break
-                }
-            }
-        }
-        if (-not $mpvExe -and (Test-Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages")) {
-            $found = Get-ChildItem -Path "$env:LOCALAPPDATA\Microsoft\WinGet\Packages" -Filter "mpv.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($found) { $mpvExe = $found.FullName }
-        }
+        $mpvExe = Find-MpvExe
     }
 }
 
@@ -180,9 +217,16 @@ if ($mpvExe) {
     if ($env:Path -notlike "*$mpvDir*") {
         $env:Path = "$mpvDir;$env:Path"
     }
-    Write-Host "✓ Audio player ready" -ForegroundColor Green
+    $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
+    if ($userPath -notlike "*$mpvDir*") {
+        [Environment]::SetEnvironmentVariable("Path", "$mpvDir;$userPath", [EnvironmentVariableTarget]::User)
+    }
+    Write-Host "✓ Audio player ready ($mpvExe)" -ForegroundColor Green
 } else {
-    Write-Host "✓ Audio player setup complete" -ForegroundColor Green
+    Write-Host "⚠  mpv audio player was not found automatically." -ForegroundColor Yellow
+    Write-Host "   To enable music playback, install mpv using:" -ForegroundColor Yellow
+    Write-Host "   winget install shinchiro.mpv" -ForegroundColor Cyan
+    Write-Host "   or download from https://mpv.io" -ForegroundColor Cyan
 }
 
 # 3. Setup isolated virtual environment in %LOCALAPPDATA%\music-cli
@@ -209,6 +253,23 @@ if (-not (Test-Path $venvPython)) {
 # Create command wrapper music.cmd so running 'music' works reliably across CMD and PowerShell
 $cmdWrapper = Join-Path $scriptsDir "music.cmd"
 Set-Content -Path $cmdWrapper -Value "@echo off`r`n`"%~dp0python.exe`" -m music.main %*"
+
+# Save detected mpv path to user config so music-cli finds it directly
+if ($mpvExe) {
+    $cfgDir = Join-Path $env:USERPROFILE ".config\music-cli"
+    New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+    $cfgFile = Join-Path $cfgDir "config.json"
+    $escapedMpv = $mpvExe -replace '\\', '\\'
+    if (Test-Path $cfgFile) {
+        try {
+            $existingJson = Get-Content $cfgFile -Raw | ConvertFrom-Json
+            $existingJson | Add-Member -NotePropertyName "mpv_path" -NotePropertyValue $mpvExe -Force
+            $existingJson | ConvertTo-Json | Set-Content $cfgFile
+        } catch {}
+    } else {
+        Set-Content -Path $cfgFile -Value "{`r`n  `"mpv_path`": `"$escapedMpv`"`r`n}"
+    }
+}
 
 # 5. Add to User PATH if needed
 $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)

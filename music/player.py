@@ -13,7 +13,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from music.auth import get_mpv_auth_args
-from music.config import CONFIG_DIR, find_node_bin, find_ytdl_bin, get_config_val
+from music.config import CONFIG_DIR, ensure_config_dir, find_mpv_bin, find_node_bin, find_ytdl_bin, get_config_val
 
 
 if sys.platform == "win32":
@@ -74,51 +74,17 @@ class MpvPlayer:
             except OSError:
                 pass
 
-        mpv_bin = shutil.which("mpv")
-        if not mpv_bin and sys.platform == "win32":
-            common_mpv_paths = [
-                r"C:\ProgramData\chocolatey\bin\mpv.exe",
-                r"C:\ProgramData\chocolatey\lib\mpvio.install\tools\mpv.exe",
-                r"C:\ProgramData\chocolatey\lib\mpv\tools\mpv.exe",
-                r"C:\mpv\mpv.exe",
-                r"C:\tools\mpv\mpv.exe",
-                os.path.expandvars(r"%LOCALAPPDATA%\mpv\mpv.exe"),
-                os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Links\mpv.exe"),
-                os.path.expandvars(r"%LOCALAPPDATA%\Programs\mpv\mpv.exe"),
-                os.path.expandvars(r"%ProgramFiles%\mpv\mpv.exe"),
-                os.path.expandvars(r"%ProgramFiles(x86)%\mpv\mpv.exe"),
-                os.path.expandvars(r"%USERPROFILE%\scoop\apps\mpv\current\mpv.exe"),
-                r"C:\scoop\apps\mpv\current\mpv.exe",
-            ]
-            for p in common_mpv_paths:
-                if os.path.exists(p):
-                    mpv_bin = p
-                    break
-            winget_pkgs = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WinGet\Packages")
-            if not mpv_bin and os.path.exists(winget_pkgs):
-                for root, _, files in os.walk(winget_pkgs):
-                    if "mpv.exe" in files:
-                        mpv_bin = os.path.join(root, "mpv.exe")
-                        break
-            if not mpv_bin and os.path.exists(r"C:\ProgramData\chocolatey"):
-                for root, _, files in os.walk(r"C:\ProgramData\chocolatey"):
-                    if "mpv.exe" in files:
-                        mpv_bin = os.path.join(root, "mpv.exe")
-                        break
-        elif not mpv_bin and sys.platform == "darwin":
-            common_mac_paths = [
-                "/opt/homebrew/bin/mpv",
-                "/usr/local/bin/mpv",
-                os.path.expanduser("~/.local/bin/mpv"),
-            ]
-            for p in common_mac_paths:
-                if os.path.exists(p):
-                    mpv_bin = p
-                    break
-
+        mpv_bin = find_mpv_bin()
         if not mpv_bin:
-            raise RuntimeError("mpv executable not found. Please ensure mpv is installed.")
+            raise RuntimeError(
+                "mpv audio player executable was not found on your system.\n"
+                "Please install mpv:\n"
+                "  • Windows: winget install shinchiro.mpv (or download from https://mpv.io)\n"
+                "  • macOS:   brew install mpv\n"
+                "  • Linux:   sudo apt install mpv"
+            )
 
+        ensure_config_dir()
         yt_dlp_bin = find_ytdl_bin()
         yt_dlp_arg = yt_dlp_bin.replace("\\", "/") if sys.platform == "win32" else yt_dlp_bin
         node_bin = find_node_bin()
@@ -132,7 +98,7 @@ class MpvPlayer:
             "--ytdl-format=bestaudio/best",
             "--gapless-audio=yes",
             "--prefetch-playlist=yes",
-            "--keep-open=no",
+            "--keep-open=yes",
             "--force-window=no",
             "--terminal=no",
             "--msg-level=all=no",
@@ -163,7 +129,7 @@ class MpvPlayer:
 
         popen_kwargs = {
             "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
+            "stderr": subprocess.PIPE,
             "stdin": subprocess.DEVNULL,
         }
         if preexec is not None:
@@ -173,9 +139,25 @@ class MpvPlayer:
 
         # Wait for socket or named pipe to become available
         connected = False
-        if sys.platform == "win32":
-            import _winapi
-            for _ in range(40):
+        max_retries = 80 if sys.platform == "win32" else 50
+        retry_delay = 0.05
+
+        for _ in range(max_retries):
+            # Check if mpv process crashed or exited prematurely
+            if self.process.poll() is not None:
+                err_text = ""
+                if self.process.stderr:
+                    try:
+                        err_text = self.process.stderr.read().decode("utf-8", errors="replace").strip()
+                    except Exception:
+                        pass
+                raise RuntimeError(
+                    f"mpv exited prematurely with code {self.process.poll()}." +
+                    (f"\n{err_text}" if err_text else "")
+                )
+
+            if sys.platform == "win32":
+                import _winapi
                 try:
                     handle = _winapi.CreateFile(
                         self.sock_path,
@@ -192,9 +174,8 @@ class MpvPlayer:
                     connected = True
                     break
                 except OSError:
-                    time.sleep(0.05)
-        else:
-            for _ in range(40):
+                    time.sleep(retry_delay)
+            else:
                 if os.path.exists(self.sock_path):
                     try:
                         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -205,8 +186,8 @@ class MpvPlayer:
                         connected = True
                         break
                     except (socket.error, OSError):
-                        time.sleep(0.05)
-                time.sleep(0.05)
+                        time.sleep(retry_delay)
+                time.sleep(retry_delay)
 
         if not connected:
             self.stop()

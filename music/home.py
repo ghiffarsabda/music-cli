@@ -6,6 +6,7 @@ infinite scrolling and interactive album & playlist accordion expansion/collapse
 """
 
 import shutil
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -22,7 +23,7 @@ from rich.text import Text
 
 from music.adblock import check_and_skip_ads
 from music.cache import get_cached_search, set_cached_search
-from music.config import get_config_val
+from music.config import find_mpv_bin, get_config_val
 from music.history import get_history, search_history
 from music.library import get_recent_tracks, search_local_library
 from music.player import MpvPlayer
@@ -745,6 +746,14 @@ def run_home_view(
 
     notification_msg = ""
     notif_clear_time = 0.0
+    if not find_mpv_bin():
+        if sys.platform == "win32":
+            notification_msg = "[bold yellow]⚠ mpv not detected. Audio requires mpv: winget install shinchiro.mpv[/bold yellow]"
+        elif sys.platform == "darwin":
+            notification_msg = "[bold yellow]⚠ mpv not detected. Audio requires mpv: brew install mpv[/bold yellow]"
+        else:
+            notification_msg = "[bold yellow]⚠ mpv not detected. Audio requires mpv: sudo apt install mpv[/bold yellow]"
+        notif_clear_time = time.time() + 10.0
     action_dialog_item: Optional[Tuple[str, str, str, Any]] = None
     action_dialog_idx: int = 0
     active_now_playing_time = now_playing_time

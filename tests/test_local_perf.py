@@ -470,6 +470,7 @@ def test_zero_external_pip_dependencies_audit():
         "time",
         "typing",
         "unicodedata",
+        "winreg",
     }
 
     files_to_audit = [

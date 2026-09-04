@@ -598,7 +598,26 @@ def run_player_loop(
     try:
         player.start()
     except Exception as e:
-        console.print(f"[bold red]Failed to start player backend:[/bold red] {e}")
+        console.clear()
+        console.print()
+        console.print(
+            Panel(
+                f"[bold red]❌ Failed to start audio playback engine:[/bold red]\n\n"
+                f"{e}\n\n"
+                f"[bold cyan]Tip:[/bold cyan] Ensure [bold]mpv[/bold] player is installed on your machine:\n"
+                f"  • Windows: [yellow]winget install shinchiro.mpv[/yellow] (or visit [underline]https://mpv.io[/underline])\n"
+                f"  • macOS:   [yellow]brew install mpv[/yellow]\n"
+                f"  • Linux:   [yellow]sudo apt install mpv[/yellow]",
+                title="[bold red]Playback Engine Error[/bold red]",
+                border_style="red",
+                box=box.ROUNDED,
+                padding=(1, 2),
+            )
+        )
+        try:
+            Prompt.ask("\n[bold yellow]Press Enter to return to search...[/bold yellow]")
+        except Exception:
+            time.sleep(3.0)
         return
 
     player.play(stream_url)

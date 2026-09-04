@@ -1,5 +1,7 @@
 """Unit and integration tests for music-cli."""
 
+import os
+import shutil
 import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
@@ -428,12 +430,17 @@ def test_prebuffering_queue_sync():
 
 
 def test_stream_url_and_exec_discovery():
-    """Verify robust yt-dlp discovery and stream URL resolution."""
-    from music.config import find_ytdl_bin, get_ytdl_cmd_prefix
+    """Verify robust yt-dlp and mpv discovery and stream URL resolution."""
+    from music.config import find_ytdl_bin, get_ytdl_cmd_prefix, find_mpv_bin
     from music.search import resolve_audio_stream_url
 
     ytdl_bin = find_ytdl_bin()
     assert ytdl_bin, "find_ytdl_bin must return a non-empty string"
+
+    mpv_bin = find_mpv_bin()
+    assert isinstance(mpv_bin, str), "find_mpv_bin must return a string"
+    if mpv_bin:
+        assert os.path.exists(mpv_bin) or shutil.which(mpv_bin), f"Resolved mpv_bin '{mpv_bin}' must exist"
 
     cmd_prefix = get_ytdl_cmd_prefix()
     assert isinstance(cmd_prefix, list) and len(cmd_prefix) >= 1
