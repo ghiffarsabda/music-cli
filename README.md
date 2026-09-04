@@ -12,14 +12,15 @@ No signups, accounts, or complex setup required. Just paste one line into your t
 ### 🍎 Mac & 🐧 Linux
 Open your **Terminal** and run:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ghiffarsabda/music-cli/main/install.sh | bash
+curl -fsSL https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.sh | bash
 ```
 
 ### 🪟 Windows
 Open **PowerShell** and run:
 ```powershell
-irm https://raw.githubusercontent.com/ghiffarsabda/music-cli/main/install.ps1 | iex
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; irm https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 -UseBasicParsing | iex
 ```
+*(Or if you prefer `curl`: `curl.exe -fsSL https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 | powershell -`)*
 
 > **Done!** Now just type **`music`** and press Enter to start listening.
 
@@ -135,6 +136,17 @@ Run <code>music history</code> to view your recent tracks, or select a number to
 <summary><b>Can I connect my YouTube Premium account? (Optional)</b></summary>
 <br>
 If you want to access your private account playlists, you can optionally run <code>music login</code>. You can log out anytime with <code>music login --logout</code>.
+</details>
+
+<details>
+<summary><b>Windows shows: <code>irm : unable to connect to remote server</code>?</b></summary>
+<br>
+This happens on some Windows machines when PowerShell defaults to older TLS security protocols or if your local internet provider (e.g. IndiHome / Telkomsel) blocks GitHub's raw address.
+<br><br>
+<b>Solution 1 (Recommended):</b> Paste this exact line into PowerShell:
+<pre><code>[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; irm https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 -UseBasicParsing | iex</code></pre>
+<b>Solution 2:</b> Or use Windows built-in <code>curl.exe</code>:
+<pre><code>curl.exe -fsSL https://cdn.jsdelivr.net/gh/ghiffarsabda/music-cli@main/install.ps1 | powershell -</code></pre>
 </details>
 
 ---

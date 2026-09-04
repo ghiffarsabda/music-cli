@@ -80,10 +80,10 @@ mkdir -p "${BIN_DIR}"
 
 python3 -m venv "${INSTALL_DIR}/venv"
 
-# 4. Install / Update music-cli
+# 4. Install / Update music-cli (zip archive doesn't require git CLI)
 echo -e "${CYAN}→ Installing music-cli and dependencies...${RESET}"
 "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip --quiet
-"${INSTALL_DIR}/venv/bin/pip" install --upgrade "git+https://github.com/ghiffarsabda/music-cli.git" --quiet
+"${INSTALL_DIR}/venv/bin/pip" install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
 
 # 5. Create symlink to ~/.local/bin/music
 ln -sf "${INSTALL_DIR}/venv/bin/music" "${BIN_DIR}/music"

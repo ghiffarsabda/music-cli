@@ -6,6 +6,13 @@
 
 $ErrorActionPreference = "Stop"
 
+# Ensure TLS 1.2+ for secure downloads in PowerShell 5.1
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
+
 Write-Host ""
 Write-Host "♫  m u s i c  -  c l i Installer (Windows)" -ForegroundColor Cyan
 Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor DarkCyan
@@ -31,16 +38,29 @@ $mpvCmd = Get-Command mpv -ErrorAction SilentlyContinue
 if (-not $mpvCmd) {
     Write-Host "⚠ mpv player is not detected." -ForegroundColor Yellow
     Write-Host "music-cli requires mpv for audio streaming."
+    $mpvInstalled = $false
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "→ Installing mpv via winget..." -ForegroundColor Cyan
-        winget install --id shinchiro.mpv --accept-package-agreements --accept-source-agreements
-    } elseif (Get-Command scoop -ErrorAction SilentlyContinue) {
+        try {
+            winget install --id shinchiro.mpv --accept-package-agreements --accept-source-agreements
+            if ($LASTEXITCODE -eq 0) { $mpvInstalled = $true }
+        } catch {}
+    }
+    if (-not $mpvInstalled -and (Get-Command scoop -ErrorAction SilentlyContinue)) {
         Write-Host "→ Installing mpv via scoop..." -ForegroundColor Cyan
-        scoop install mpv
-    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+        try {
+            scoop install mpv
+            if ($LASTEXITCODE -eq 0) { $mpvInstalled = $true }
+        } catch {}
+    }
+    if (-not $mpvInstalled -and (Get-Command choco -ErrorAction SilentlyContinue)) {
         Write-Host "→ Installing mpv via choco..." -ForegroundColor Cyan
-        choco install mpv -y
-    } else {
+        try {
+            choco install mpv -y
+            if ($LASTEXITCODE -eq 0) { $mpvInstalled = $true }
+        } catch {}
+    }
+    if (-not $mpvInstalled) {
         Write-Host "Please install mpv from https://mpv.io or run: winget install shinchiro.mpv" -ForegroundColor Yellow
     }
 } else {
@@ -58,11 +78,11 @@ New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
 & $pyCmd.Source -m venv $venvDir
 
-# 4. Install / Upgrade music-cli
+# 4. Install / Upgrade music-cli (zip archive doesn't require git CLI)
 Write-Host "→ Installing music-cli and dependencies..." -ForegroundColor Cyan
 $pipExe = Join-Path $scriptsDir "pip.exe"
 & $pipExe install --upgrade pip --quiet
-& $pipExe install --upgrade "git+https://github.com/ghiffarsabda/music-cli.git" --quiet
+& $pipExe install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
 
 # 5. Add to User PATH if needed
 $userPath = [Environment]::GetEnvironmentVariable("Path", [EnvironmentVariableTarget]::User)
