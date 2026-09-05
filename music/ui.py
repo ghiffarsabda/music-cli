@@ -1,6 +1,7 @@
 """Terminal User Interface for music-cli using Rich."""
 
 import os
+import shutil
 import sys
 import threading
 import time
@@ -416,7 +417,7 @@ def render_player_panel(
 
     return Panel(
         Group(*elements),
-        title="[bold bright_blue]🎵 Music CLI - YouTube Music[/bold bright_blue]",
+        title="[bold bright_blue]🎵 Music CLI[/bold bright_blue]",
         border_style="bright_blue",
         padding=(1, 2),
     )
@@ -435,13 +436,24 @@ def render_queue_panel(
     scroll_offset: int,
     page_size: int = 5,
     notification_msg: str = "",
+    target_height: Optional[int] = None,
 ) -> Panel:
     """Render compact Queue Manager panel directly flush under the playback box."""
     if not queue:
-        content = Text(
-            "\n  The queue is currently empty. Press '/' to search and queue tracks with '+' or 'Enter'!\n",
-            style="dim italic",
-        )
+        empty_lines = [
+            Text(""),
+            Align.center(Text("The queue is currently empty.", style="dim italic")),
+            Align.center(Text("Press '/' to search and queue tracks with '+' or 'Enter'!", style="dim")),
+        ]
+        if target_height and target_height > 6:
+            pad = max(0, (target_height - 5) // 2)
+            elements = []
+            if pad > 0:
+                elements.append(Text("\n" * (pad - 1)))
+            elements.extend(empty_lines)
+            content = Group(*elements)
+        else:
+            content = Group(*empty_lines)
     else:
         table = Table(
             box=None,
@@ -481,8 +493,17 @@ def render_queue_panel(
             "[bold green]Shift+D[/bold green] Download   [dim]•[/dim]   "
             "[bold cyan]Enter[/bold cyan] Play Now"
         )
-        elements.append(Text(""))
-        elements.append(Align.center(controls))
+        if target_height is not None and target_height >= 6:
+            used_lines = 2 + 1 + len(visible_items) + (1 if notification_msg else 0) + 2
+            spacer_lines = max(0, target_height - used_lines)
+            if spacer_lines > 0:
+                elements.append(Text("\n" * (spacer_lines - 1)))
+            elements.append(Text(""))
+            elements.append(Align.center(controls))
+        elif target_height is None or target_height >= 5:
+            elements.append(Text(""))
+            elements.append(Align.center(controls))
+
         content = Group(*elements)
 
     start_n = scroll_offset + 1 if queue else 0
@@ -494,6 +515,7 @@ def render_queue_panel(
         title=f"[bold bright_cyan]🎶 Up Next Queue {count_str}[/bold bright_cyan]",
         border_style="bright_cyan",
         padding=(0, 2),
+        height=target_height,
     )
 
 
@@ -764,7 +786,6 @@ def run_player_loop(
 
     queue_selected_idx = 0
     queue_scroll_offset = 0
-    QUEUE_PAGE_SIZE = 5
     queue_notif_msg = ""
     queue_notif_clear = 0.0
 
@@ -1150,12 +1171,32 @@ def run_player_loop(
                     playlist_pos=cur_pos_str,
                 )
 
+                # Check for active offline downloads
+                dl_card = None
+                try:
+                    from music.offline import get_download_tracker
+                    tracker = get_download_tracker()
+                    if tracker.is_active():
+                        dl_card = render_download_progress_card(tracker.get_snapshot())
+                except Exception:
+                    pass
+
+                # Viewport sizing: queue card takes the whole space to the end of the viewport;
+                # when a download is running, reduce the height of the queue card to make space for the download card.
+                term_size = shutil.get_terminal_size((80, 24))
+                term_h = max(20, term_size.lines)
+                panel_lines = len(list(console.render_lines(panel, console.options)))
+                dl_lines = len(list(console.render_lines(dl_card, console.options))) if dl_card else 0
+
+                queue_height = max(4, term_h - panel_lines - dl_lines)
+                queue_page_size = max(1, queue_height - 5 - (1 if queue_notif_msg else 0)) if queue_height >= 6 else 1
+
                 if queue:
                     queue_selected_idx = max(0, min(len(queue) - 1, queue_selected_idx))
                     if queue_selected_idx < queue_scroll_offset:
                         queue_scroll_offset = queue_selected_idx
-                    elif queue_selected_idx >= queue_scroll_offset + QUEUE_PAGE_SIZE:
-                        queue_scroll_offset = queue_selected_idx - QUEUE_PAGE_SIZE + 1
+                    elif queue_selected_idx >= queue_scroll_offset + queue_page_size:
+                        queue_scroll_offset = queue_selected_idx - queue_page_size + 1
                 else:
                     queue_selected_idx = 0
                     queue_scroll_offset = 0
@@ -1164,18 +1205,14 @@ def run_player_loop(
                     queue=queue,
                     selected_idx=queue_selected_idx,
                     scroll_offset=queue_scroll_offset,
-                    page_size=QUEUE_PAGE_SIZE,
+                    page_size=queue_page_size,
                     notification_msg=queue_notif_msg,
+                    target_height=queue_height,
                 )
 
                 render_elements = [panel, queue_box]
-                try:
-                    from music.offline import get_download_tracker
-                    tracker = get_download_tracker()
-                    if tracker.is_active():
-                        render_elements.append(render_download_progress_card(tracker.get_snapshot()))
-                except Exception:
-                    pass
+                if dl_card:
+                    render_elements.append(dl_card)
 
                 live.update(Group(*render_elements))
 
