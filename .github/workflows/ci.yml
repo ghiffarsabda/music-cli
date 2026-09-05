@@ -71,4 +71,5 @@ jobs:
           fi
           pip install -e .
           python tests/test_components.py
+          python tests/test_offline.py
           python tests/test_local_perf.py

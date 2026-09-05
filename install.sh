@@ -44,25 +44,25 @@ if ! command -v mpv &>/dev/null; then
     if [ "$OS_TYPE" = "Darwin" ]; then
         if command -v brew &>/dev/null; then
             echo -e "${CYAN}→ Installing mpv via Homebrew...${RESET}"
-            brew install mpv
+            brew install mpv || true
         else
             echo -e "Install Homebrew first, then run: ${BOLD}brew install mpv${RESET}"
         fi
     elif [ "$OS_TYPE" = "Linux" ]; then
-        if command -v apt-get &>/dev/null; then
-            echo -e "${CYAN}→ Installing mpv via apt (may prompt for sudo password)...${RESET}"
-            sudo apt-get update -y && sudo apt-get install -y mpv
-        elif command -v pacman &>/dev/null; then
+        if command -v apt-get &>/dev/null && ([ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null); then
+            echo -e "${CYAN}→ Installing mpv via apt...${RESET}"
+            (sudo apt-get update -y && sudo apt-get install -y mpv) || true
+        elif command -v pacman &>/dev/null && ([ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null); then
             echo -e "${CYAN}→ Installing mpv via pacman...${RESET}"
-            sudo pacman -S --noconfirm mpv
-        elif command -v dnf &>/dev/null; then
+            (sudo pacman -S --noconfirm mpv) || true
+        elif command -v dnf &>/dev/null && ([ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null); then
             echo -e "${CYAN}→ Installing mpv via dnf...${RESET}"
-            sudo dnf install -y mpv
-        elif command -v zypper &>/dev/null; then
+            (sudo dnf install -y mpv) || true
+        elif command -v zypper &>/dev/null && ([ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null); then
             echo -e "${CYAN}→ Installing mpv via zypper...${RESET}"
-            sudo zypper install -y mpv
+            (sudo zypper install -y mpv) || true
         else
-            echo -e "Please install mpv using your package manager (e.g. sudo apt install mpv)."
+            echo -e "Tip: You can install mpv using: ${BOLD}sudo apt install mpv${RESET} (or your distro package manager)."
         fi
     fi
 else
@@ -79,17 +79,31 @@ mkdir -p "${INSTALL_DIR}"
 mkdir -p "${BIN_DIR}"
 
 if ! python3 -m venv "${INSTALL_DIR}/venv" 2>/dev/null; then
-    if command -v apt-get &>/dev/null; then
+    rm -rf "${INSTALL_DIR}/venv"
+    # Fallback A: create venv without ensurepip, then bootstrap pip in user-space
+    if python3 -m venv --without-pip "${INSTALL_DIR}/venv" 2>/dev/null; then
+        echo -e "${CYAN}→ Bootstrapping pip in isolated environment...${RESET}"
+        curl -fsSL https://bootstrap.pypa.io/get-pip.py | "${INSTALL_DIR}/venv/bin/python3" - --quiet
+    elif command -v apt-get &>/dev/null && ([ "$EUID" -eq 0 ] || sudo -n true 2>/dev/null); then
         echo -e "${CYAN}→ Installing python3-venv package...${RESET}"
         sudo apt-get update -y && sudo apt-get install -y python3-venv python3-pip
         python3 -m venv "${INSTALL_DIR}/venv"
+    else
+        echo -e "${RED}✗ Error: Could not create Python virtual environment.${RESET}"
+        echo -e "Please install python3-venv (e.g. sudo apt install python3-venv) and retry."
+        exit 1
     fi
 fi
 
-# 4. Install / Update music-cli (zip archive doesn't require git CLI)
-echo -e "${CYAN}→ Installing music-cli and dependencies...${RESET}"
-"${INSTALL_DIR}/venv/bin/pip" install --upgrade pip --quiet
-"${INSTALL_DIR}/venv/bin/pip" install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
+# 4. Install / Update music-cli
+if [ -f "./pyproject.toml" ] && [ -d "./music" ]; then
+    echo -e "${CYAN}→ Installing music-cli from local repository...${RESET}"
+    "${INSTALL_DIR}/venv/bin/pip" install --upgrade . --quiet
+else
+    echo -e "${CYAN}→ Installing music-cli and dependencies...${RESET}"
+    "${INSTALL_DIR}/venv/bin/pip" install --upgrade pip --quiet
+    "${INSTALL_DIR}/venv/bin/pip" install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
+fi
 
 # 5. Create symlinks in ~/.local/bin
 ln -sf "${INSTALL_DIR}/venv/bin/music" "${BIN_DIR}/music"

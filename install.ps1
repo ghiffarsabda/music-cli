@@ -247,12 +247,20 @@ if (-not (Test-Path $venvPython)) {
     & $pyExe -m venv $venvDir
 }
 
-# 4. Install / Upgrade music-cli (zip archive doesn't require git CLI)
-& $venvPython -m pip install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
+# 4. Install / Upgrade music-cli
+if ((Test-Path ".\pyproject.toml") -and (Test-Path ".\music")) {
+    Write-Host "   Installing from local repository..." -ForegroundColor Gray
+    & $venvPython -m pip install --upgrade . --quiet
+} else {
+    & $venvPython -m pip install --upgrade "https://github.com/ghiffarsabda/music-cli/archive/refs/heads/main.zip" --quiet
+}
 
-# Create command wrapper music.cmd so running 'music' works reliably across CMD and PowerShell
+# Create command wrappers music.cmd and music.ps1 so running 'music' works reliably across CMD and PowerShell
 $cmdWrapper = Join-Path $scriptsDir "music.cmd"
-Set-Content -Path $cmdWrapper -Value "@echo off`r`n`"%~dp0python.exe`" -m music.main %*"
+Set-Content -Path $cmdWrapper -Value "@echo off`r`n`"%~dp0python.exe`" -m music %*"
+
+$ps1Wrapper = Join-Path $scriptsDir "music.ps1"
+Set-Content -Path $ps1Wrapper -Value "& `"`$PSScriptRoot\python.exe`" -m music `$args"
 
 # Save detected mpv path to user config so music-cli finds it directly
 if ($mpvExe) {
