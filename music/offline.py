@@ -298,18 +298,27 @@ def reconcile_offline_tracks_from_disk(conn: Optional[Any] = None) -> int:
         return _do_sync(c)
 
 
-def init_offline_db(conn: Optional[Any] = None) -> None:
+_offline_db_initialized: bool = False
+
+
+def init_offline_db(conn: Optional[Any] = None, force: bool = False) -> None:
     """Ensure offline tables, library tables, and indices are created in library database."""
+    global _offline_db_initialized
+    if _offline_db_initialized and not force and conn is None:
+        return
+
     if conn is not None:
         init_library_db(conn)
         conn.executescript(OFFLINE_SCHEMA_SQL)
         reconcile_offline_tracks_from_disk(conn)
+        _offline_db_initialized = True
         return
 
     with get_db() as c:
         init_library_db(c)
         c.executescript(OFFLINE_SCHEMA_SQL)
         reconcile_offline_tracks_from_disk(c)
+    _offline_db_initialized = True
 
 
 def is_track_offline(video_id: str) -> bool:
@@ -488,32 +497,34 @@ def save_offline_collection(
         conn.commit()
 
 
-def list_offline_tracks(query: Optional[str] = None) -> List[SongItem]:
+def list_offline_tracks(
+    query: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> List[SongItem]:
     """List all downloaded tracks, optionally filtered by search query with multi-term token matching."""
     init_offline_db()
     items: List[SongItem] = []
     try:
         with get_db() as conn:
+            sql = "SELECT * FROM offline_tracks"
+            params: List[Any] = []
             if query and query.strip():
                 tokens = [t.strip().lower() for t in query.strip().split() if t.strip()]
                 conditions = []
-                params = []
                 for tok in tokens:
                     conditions.append("LOWER(title || ' ' || artist || ' ' || album) LIKE ?")
                     params.append(f"%{tok}%")
                 where_clause = " AND ".join(conditions)
-                rows = conn.execute(
-                    f"SELECT * FROM offline_tracks WHERE {where_clause} ORDER BY downloaded_at DESC",
-                    params,
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM offline_tracks ORDER BY downloaded_at DESC"
-                ).fetchall()
+                sql += f" WHERE {where_clause}"
+            sql += " ORDER BY downloaded_at DESC"
+            if limit is not None and limit > 0:
+                sql += " LIMIT ?"
+                params.append(limit)
+
+            rows = conn.execute(sql, params).fetchall()
 
             for r in rows:
-                fpath = r["file_path"]
-                if os.path.exists(fpath) and os.path.getsize(fpath) > 0:
+                if r["file_path"]:
                     items.append(
                         SongItem(
                             title=r["title"],
@@ -534,30 +545,34 @@ def list_offline_tracks(query: Optional[str] = None) -> List[SongItem]:
 def list_offline_collections(
     collection_type: Optional[str] = None,
     query: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """List all offline playlists or albums, optionally filtered by search query."""
     init_offline_db()
     collections: List[Dict[str, Any]] = []
     try:
         with get_db() as conn:
+            sql = "SELECT * FROM offline_collections"
+            params: List[Any] = []
+            conditions: List[str] = []
             if collection_type:
-                rows = conn.execute(
-                    "SELECT * FROM offline_collections WHERE LOWER(type) = ? ORDER BY downloaded_at DESC",
-                    (collection_type.lower(),),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT * FROM offline_collections ORDER BY downloaded_at DESC"
-                ).fetchall()
+                conditions.append("LOWER(type) = ?")
+                params.append(collection_type.lower())
+            if query and query.strip():
+                q_tokens = [t.strip().lower() for t in query.strip().split() if t.strip()]
+                for tok in q_tokens:
+                    conditions.append("LOWER(title || ' ' || author) LIKE ?")
+                    params.append(f"%{tok}%")
+            if conditions:
+                sql += f" WHERE {' AND '.join(conditions)}"
+            sql += " ORDER BY downloaded_at DESC"
+            if limit is not None and limit > 0:
+                sql += " LIMIT ?"
+                params.append(limit)
 
-            q_tokens = [t.strip().lower() for t in query.strip().split() if t.strip()] if query else []
+            rows = conn.execute(sql, params).fetchall()
 
             for r in rows:
-                if q_tokens:
-                    haystack = f"{r['title']} {r['author']}".lower()
-                    if not all(tok in haystack for tok in q_tokens):
-                        continue
-
                 try:
                     t_ids = json.loads(r["track_ids"])
                 except Exception:
@@ -686,7 +701,9 @@ def delete_offline_collection(collection_id: str, delete_tracks: bool = False) -
 
 def clear_all_offline_data(delete_files: bool = True) -> int:
     """Remove all offline downloaded tracks and collections."""
+    global _offline_db_initialized
     init_offline_db()
+    _offline_db_initialized = False
     count = 0
     with get_db() as conn:
         rows = conn.execute("SELECT video_id, file_path FROM offline_tracks").fetchall()

@@ -50,6 +50,11 @@ PAGE_SIZE = 7
 _PLAYLIST_CACHE: Dict[str, List[SongItem]] = {}
 _ALBUM_CACHE: Dict[str, List[SongItem]] = {}
 
+_SPECIAL_KEYS = {
+    "escape", "quit", "up", "down", "left", "right", "tab", "shift_tab",
+    "home", "end", "delete", "shift_up", "shift_down", "enter"
+}
+
 
 @dataclass
 class ContainerTrackData:
@@ -137,11 +142,18 @@ def deserialize_dropdown_item(d: Dict[str, Any]) -> DropdownItem:
     )
 
 
+_LOCAL_MATCHES_CACHE: Dict[str, List[DropdownItem]] = {}
+
+
 def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
     """Instant offline search matching against previously played tracks (0ms latency)."""
     clean_q = query.strip()
     if not clean_q:
         return []
+
+    cache_k = f"{filter_mode}:{clean_q.lower()}"
+    if cache_k in _LOCAL_MATCHES_CACHE:
+        return _LOCAL_MATCHES_CACHE[cache_k]
 
     local_items: List[DropdownItem] = []
     if filter_mode in ("All", "Tracks"):
@@ -164,7 +176,7 @@ def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
         try:
             from music.offline import list_offline_tracks, list_offline_collections
             if filter_mode == "Offline":
-                for p in list_offline_collections("playlist", query=clean_q)[:3]:
+                for p in list_offline_collections("playlist", query=clean_q, limit=3):
                     local_items.append(
                         DropdownItem(
                             kind="playlist",
@@ -180,7 +192,7 @@ def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
                             ),
                         )
                     )
-                for a in list_offline_collections("album", query=clean_q)[:3]:
+                for a in list_offline_collections("album", query=clean_q, limit=3):
                     local_items.append(
                         DropdownItem(
                             kind="album",
@@ -195,7 +207,7 @@ def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
                             ),
                         )
                     )
-            off_tracks = list_offline_tracks(clean_q)[:8 if filter_mode == "Offline" else 4]
+            off_tracks = list_offline_tracks(clean_q, limit=8 if filter_mode == "Offline" else 4)
             for s in off_tracks:
                 local_items.append(
                     DropdownItem(
@@ -208,6 +220,9 @@ def fetch_local_matches(query: str, filter_mode: str) -> List[DropdownItem]:
                 )
         except Exception:
             pass
+    if len(_LOCAL_MATCHES_CACHE) > 500:
+        _LOCAL_MATCHES_CACHE.clear()
+    _LOCAL_MATCHES_CACHE[cache_k] = local_items
     return local_items
 
 
@@ -1097,18 +1112,19 @@ def run_home_view(
             if (current_q != last_searched_query or current_mode != last_searched_mode) and (time.time() - last_key_time > 0.18):
                 new_seen = set()
                 new_items = fetch_dropdown_results(current_q, current_mode, limit=15, seen_ids=new_seen)
+                session_cache[f"{current_mode}:{current_q.lower()}"] = new_items
                 with lock:
-                    items = new_items
-                    seen_ids = new_seen
-                    current_limit = 15
-                    has_more = len(new_items) > 0
-                    last_searched_query = current_q
-                    last_searched_mode = current_mode
-                    is_searching = False
-                    session_cache[f"{current_mode}:{current_q.lower()}"] = new_items
-                    scroll_offset = 0
-                    selected_idx = 0
-                    expanded_container_id = None
+                    if query.strip() == current_q and filter_modes[filter_idx] == current_mode:
+                        items = new_items
+                        seen_ids = new_seen
+                        current_limit = 15
+                        has_more = len(new_items) > 0
+                        last_searched_query = current_q
+                        last_searched_mode = current_mode
+                        is_searching = False
+                        scroll_offset = 0
+                        selected_idx = 0
+                        expanded_container_id = None
 
     def load_more_worker(target_q: str, target_mode: str):
         nonlocal items, is_loading_more, has_more, current_limit
@@ -1802,82 +1818,82 @@ def run_home_view(
                             return ("play_now", query.strip(), None)
                     continue
 
-                    if query.strip():
-                        if is_album_url(query):
-                            return ("album_url", query.strip())
-                        if is_playlist_url(query):
-                            return ("playlist_url", query.strip())
-                        if filter_modes[filter_idx] == "Albums":
-                            return ("search_album", query.strip())
-                        if filter_modes[filter_idx] == "Playlists":
-                            return ("search_playlist", query.strip())
-                        return ("query", query.strip())
-                    return None
+                elif (
+                    key in ("\x7f", "\x08", "backspace", "ctrl_u", "\x15")
+                    or (key.isprintable() and key not in ("\r", "\n", "\t") and key not in _SPECIAL_KEYS)
+                ):
+                    # Process current key
+                    if key in ("ctrl_u", "\x15"):
+                        query = ""
+                    elif key in ("\x7f", "\x08", "backspace"):
+                        if query:
+                            query = query[:-1]
+                    else:
+                        query += key
 
-                elif key in ("\x7f", "\x08", "backspace"):
-                    if query:
-                        query = query[:-1]
-                        clean_low = query.strip().lower()
-                        curr_mode = filter_modes[filter_idx]
-                        cache_key = f"{curr_mode}:{clean_low}"
-                        cached_items = session_cache.get(cache_key)
-                        local_matches = fetch_local_matches(query, curr_mode)
-                        with lock:
-                            if cached_items:
-                                items = cached_items
-                                is_searching = False
-                            elif local_matches:
-                                items = local_matches
-                                is_searching = True
-                            elif query.strip():
-                                is_searching = True
-                            else:
-                                is_searching = False
-                                items = get_default_items(curr_mode)
-                            expanded_container_id = None
-                        last_key_time = time.time()
-                        selected_idx = 0
-                        scroll_offset = 0
+                    # Drain any pending rapid keystrokes to eliminate intermediate redraw lag
+                    while key_reader.has_pending():
+                        next_k = key_reader.get_key(timeout=0)
+                        if not next_k:
+                            break
+                        if next_k in ("ctrl_u", "\x15"):
+                            query = ""
+                        elif next_k in ("\x7f", "\x08", "backspace"):
+                            if query:
+                                query = query[:-1]
+                        elif next_k.isprintable() and next_k not in ("\r", "\n", "\t") and next_k not in _SPECIAL_KEYS:
+                            query += next_k
+                        else:
+                            key_reader._queue.insert(0, next_k)
+                            break
 
-                elif key in ("ctrl_u", "\x15"):
-                    query = ""
-                    curr_mode = filter_modes[filter_idx]
-                    with lock:
-                        is_searching = False
-                        items = get_default_items(curr_mode)
-                        expanded_container_id = None
-                    last_key_time = time.time()
-                    selected_idx = 0
-                    scroll_offset = 0
-
-                elif len(key) == 1 and key.isprintable():
-                    query += key
                     clean_low = query.strip().lower()
                     curr_mode = filter_modes[filter_idx]
 
-                    # M2: In-memory prefix narrowing across active session results in RAM (0ms)
-                    narrowed = []
-                    prefix_tag = f"{curr_mode}:"
-                    for base_key in sorted(session_cache.keys(), key=len, reverse=True):
-                        if base_key.startswith(prefix_tag):
-                            base_q = base_key[len(prefix_tag):]
-                            if clean_low.startswith(base_q) and base_q:
-                                base_items = session_cache[base_key]
-                                narrowed = [
-                                    it for it in base_items
-                                    if clean_low in it.title.lower() or clean_low in it.subtitle.lower()
-                                ]
-                                if narrowed:
-                                    break
+                    if not clean_low:
+                        with lock:
+                            is_searching = False
+                            items = get_default_items(curr_mode)
+                            expanded_container_id = None
+                    else:
+                        # 1. Exact match in session cache (0ms)
+                        cache_key = f"{curr_mode}:{clean_low}"
+                        cached_items = session_cache.get(cache_key)
+                        if cached_items:
+                            with lock:
+                                items = cached_items
+                                is_searching = False
+                                expanded_container_id = None
+                        else:
+                            # 2. In-memory prefix narrowing across active session results in RAM (0ms)
+                            narrowed = []
+                            prefix_tag = f"{curr_mode}:"
+                            for base_key in sorted(session_cache.keys(), key=len, reverse=True):
+                                if base_key.startswith(prefix_tag):
+                                    base_q = base_key[len(prefix_tag):]
+                                    if clean_low.startswith(base_q) and base_q:
+                                        base_items = session_cache[base_key]
+                                        narrowed = [
+                                            it for it in base_items
+                                            if clean_low in it.title.lower() or clean_low in it.subtitle.lower()
+                                        ]
+                                        if narrowed:
+                                            break
 
-                    local_matches = fetch_local_matches(query, curr_mode)
-                    with lock:
-                        if narrowed:
-                            items = narrowed
-                        elif local_matches:
-                            items = local_matches
-                        is_searching = True
-                        expanded_container_id = None
+                            if narrowed:
+                                with lock:
+                                    items = narrowed
+                                    is_searching = True
+                                    expanded_container_id = None
+                            else:
+                                # 3. Instant local DB/history match
+                                local_matches = fetch_local_matches(query, curr_mode)
+                                with lock:
+                                    if local_matches:
+                                        items = local_matches
+                                    is_searching = True
+                                    expanded_container_id = None
+
                     last_key_time = time.time()
                     selected_idx = 0
                     scroll_offset = 0

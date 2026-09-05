@@ -17,10 +17,11 @@ except ImportError:
     tty = None
     select = None
     HAS_TERMIOS = False
-    try:
-        import msvcrt
-    except ImportError:
-        msvcrt = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 from rich import box
 from rich.align import Align
@@ -163,14 +164,115 @@ def prompt_album_selection(albums: List[AlbumItem]) -> Optional[AlbumItem]:
             return None
 
 
+_ESCAPE_MAP: List[Tuple[bytes, str]] = [
+    (b"\x1b[1;2A", "shift_up"),
+    (b"\x1b[1;3A", "shift_up"),
+    (b"\x1b[1;5A", "shift_up"),
+    (b"\x1b\x1b[A", "shift_up"),
+    (b"\x1b[1;2B", "shift_down"),
+    (b"\x1b[1;3B", "shift_down"),
+    (b"\x1b[1;5B", "shift_down"),
+    (b"\x1b\x1b[B", "shift_down"),
+    (b"\x1b[1~", "home"),
+    (b"\x1b[4~", "end"),
+    (b"\x1b[3~", "delete"),
+    (b"\x1b[Z", "shift_tab"),
+    (b"\x1b[A", "up"),
+    (b"\x1bOA", "up"),
+    (b"\x1b[B", "down"),
+    (b"\x1bOB", "down"),
+    (b"\x1b[C", "right"),
+    (b"\x1bOC", "right"),
+    (b"\x1b[D", "left"),
+    (b"\x1bOD", "left"),
+    (b"\x1b[H", "home"),
+    (b"\x1b[F", "end"),
+]
+
+_CONTROL_MAP: Dict[int, str] = {
+    0x03: "quit",
+    0x08: "backspace",
+    0x7F: "backspace",
+    0x09: "tab",
+    0x0D: "enter",
+    0x0A: "enter",
+    0x15: "ctrl_u",
+}
+
+
+def _parse_input_bytes(raw: bytes) -> List[str]:
+    """Parse raw bytes from terminal into a list of logical keys and characters."""
+    keys: List[str] = []
+    i = 0
+    n = len(raw)
+    while i < n:
+        if raw[i:i + 2] == b"\r\n":
+            keys.append("enter")
+            i += 2
+            continue
+
+        if raw[i:i + 1] == b"\x1b":
+            matched = False
+            for seq, token in _ESCAPE_MAP:
+                if raw[i:].startswith(seq):
+                    keys.append(token)
+                    i += len(seq)
+                    matched = True
+                    break
+            if matched:
+                continue
+
+            if i + 1 == n:
+                keys.append("escape")
+                i += 1
+                continue
+
+            # ANSI CSI/SS3 escape sequence skip
+            if i + 1 < n and raw[i + 1:i + 2] in (b"[", b"O"):
+                j = i + 2
+                while j < n and not (0x40 <= raw[j] <= 0x7E):
+                    j += 1
+                if j < n:
+                    j += 1
+                i = j
+                continue
+            else:
+                keys.append("escape")
+                i += 1
+                continue
+
+        b = raw[i]
+        if b in _CONTROL_MAP:
+            keys.append(_CONTROL_MAP[b])
+            i += 1
+            continue
+
+        matched_char = False
+        for sz in (1, 2, 3, 4):
+            if i + sz <= n:
+                try:
+                    s = raw[i:i + sz].decode("utf-8")
+                    keys.append(s)
+                    i += sz
+                    matched_char = True
+                    break
+                except UnicodeDecodeError:
+                    pass
+        if not matched_char:
+            i += 1
+    return keys
+
+
 class KeyReader:
     """Non-blocking keyboard reader with cross-platform support for Linux, macOS, and Windows."""
 
     def __init__(self):
         self.old_settings = None
         self.fd: Optional[int] = None
+        self._queue: List[str] = []
 
     def __enter__(self):
+        self._queue.clear()
         if HAS_TERMIOS and sys.stdin.isatty():
             try:
                 self.fd = sys.stdin.fileno()
@@ -182,64 +284,55 @@ class KeyReader:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self._queue.clear()
         if HAS_TERMIOS and self.old_settings and self.fd is not None:
             try:
                 termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
             except Exception:
                 pass
 
+    def has_pending(self) -> bool:
+        """Return True if there are buffered keys in the queue or input is immediately readable."""
+        if self._queue:
+            return True
+        if HAS_TERMIOS and self.fd is not None and sys.stdin.isatty():
+            try:
+                rlist, _, _ = select.select([self.fd], [], [], 0)
+                return bool(rlist)
+            except Exception:
+                return False
+        elif msvcrt:
+            return msvcrt.kbhit()
+        return False
+
     def get_key(self, timeout: float = 0.05) -> Optional[str]:
         """Read a single keypress or key escape sequence within timeout using unbuffered input."""
+        if self._queue:
+            return self._queue.pop(0)
+
         if HAS_TERMIOS:
             if not sys.stdin.isatty() or self.fd is None:
                 time.sleep(timeout)
                 return None
 
-            rlist, _, _ = select.select([self.fd], [], [], timeout)
+            try:
+                rlist, _, _ = select.select([self.fd], [], [], timeout)
+            except Exception:
+                return None
+
             if not rlist:
                 return None
 
             try:
-                raw = os.read(self.fd, 32)
+                raw = os.read(self.fd, 128)
                 if not raw:
                     return None
-
-                # Escape sequences (Arrows, Home, End, Delete, Shift+Arrows)
-                if raw in (b"\x1b[1;2A", b"\x1b[1;3A", b"\x1b[1;5A", b"\x1b\x1b[A"):
-                    return "shift_up"
-                elif raw in (b"\x1b[1;2B", b"\x1b[1;3B", b"\x1b[1;5B", b"\x1b\x1b[B"):
-                    return "shift_down"
-                elif raw in (b"\x1b[A", b"\x1bOA"):
-                    return "up"
-                elif raw in (b"\x1b[B", b"\x1bOB"):
-                    return "down"
-                elif raw in (b"\x1b[C", b"\x1bOC"):
-                    return "right"
-                elif raw in (b"\x1b[D", b"\x1bOD"):
-                    return "left"
-                elif raw in (b"\x1b[H", b"\x1b[1~"):
-                    return "home"
-                elif raw in (b"\x1b[F", b"\x1b[4~"):
-                    return "end"
-                elif raw in (b"\x1b[3~",):
-                    return "delete"
-                elif raw == b"\x1b":
-                    return "escape"
-                elif raw == b"\x03":  # Ctrl-C
-                    return "quit"
-                elif raw in (b"\r", b"\n"):
-                    return "enter"
-                elif raw == b"\t":
-                    return "tab"
-                elif raw in (b"\x1b[Z",):
-                    return "shift_tab"
-                elif raw in (b"\x7f", b"\x08"):
-                    return "backspace"
-                elif raw == b"\x15":  # Ctrl-U
-                    return "ctrl_u"
-
-                # Decode normal printable UTF-8 character
-                return raw.decode("utf-8", errors="ignore")
+                keys = _parse_input_bytes(raw)
+                if not keys:
+                    return None
+                if len(keys) > 1:
+                    self._queue.extend(keys[1:])
+                return keys[0]
             except Exception:
                 return None
         elif msvcrt:
